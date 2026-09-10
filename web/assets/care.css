@@ -1,0 +1,38 @@
+.care-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.care-actions .text-danger {
+  width: auto;
+  padding: 10px;
+}
+
+.care-contact-edit {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 12px;
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.care-contact-edit[hidden] {
+  display: none;
+}
+
+.care-contact-edit .primary {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 720px) {
+  .care-contact-edit {
+    grid-template-columns: 1fr;
+  }
+
+  .care-contact-edit .primary {
+    grid-column: auto;
+  }
+}

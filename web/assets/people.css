@@ -1,0 +1,54 @@
+.person-photo {
+  width: 58px;
+  height: 58px;
+  border-radius: 19px;
+  object-fit: cover;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.person-card .edit-toggle,
+.person-card .person-edit {
+  grid-column: 1 / -1;
+}
+
+.person-edit {
+  padding: 14px;
+  border-radius: 14px;
+  background: #f6fbf8;
+}
+
+.person-edit label:first-child {
+  margin-top: 0;
+}
+
+.person-edit .primary {
+  width: 100%;
+}
+
+.care-contacts {
+  display: grid;
+  gap: 10px;
+}
+
+.care-contacts article {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #f6fbf8;
+}
+
+.care-contacts article span {
+  color: #17634e;
+  font-weight: 800;
+}
+
+.care-contacts article small {
+  grid-column: 1 / -1;
+  color: #6a7d75;
+}
+.face-sample-gallery { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.5rem; margin:.75rem 0; }
+.face-sample-gallery img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:.75rem; border:1px solid var(--border, #d7dde3); }
+@media (max-width:640px) { .face-sample-gallery { grid-template-columns:repeat(3,minmax(0,1fr)); } }

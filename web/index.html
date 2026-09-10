@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#17483a">
+  <meta name="description" content="Aplicación privada para acompañar y cuidar a quienes más quieres.">
+  <title>Faro Familia</title>
+  <link rel="manifest" href="/assets/manifest.webmanifest">
+  <link rel="stylesheet" href="/assets/app.css?v=2">
+  <link rel="stylesheet" href="/assets/events.css?v=1">
+  <link rel="stylesheet" href="/assets/people.css?v=1">
+  <link rel="stylesheet" href="/assets/care.css?v=1">
+  <link rel="stylesheet" href="/assets/patient.css?v=1">
+</head>
+<body>
+  <header class="hero">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">F</span><div><span>Faro Familia</span><small>Tu círculo de confianza</small></div></div>
+    <span id="connection" class="connection" role="status">Conectando…</span>
+    <div class="welcome"><p>Todo lo importante, cerca</p><h1>Acompaña sus recuerdos<br>con calma y cariño.</h1><p class="lead">Añade personas conocidas, configura a la familia y aclara encuentros que las gafas no hayan reconocido.</p></div>
+  </header>
+  <main>
+    <section class="summary" aria-label="Resumen">
+      <article><strong id="people-count">0</strong><span>personas conocidas</span></article>
+      <article><strong id="review-count">0</strong><span>por identificar</span></article>
+      <article><strong id="contact-count">0</strong><span>contactos preparados</span></article>
+    </section>
+    <nav class="tabs" aria-label="Secciones">
+      <button class="tab active" data-view="patient-view">Paciente</button>
+      <button class="tab" data-view="people-view">Personas conocidas</button>
+      <button class="tab" data-view="reviews-view">Por aclarar <span id="review-badge" class="badge" hidden></span></button>
+      <button class="tab" data-view="care-view">Cuidados</button>
+      <button class="tab" data-view="memory-view">Memoria</button>
+    </nav>
+    <section id="patient-view" class="view active">
+      <div class="section-heading"><div><span class="kicker">Quien usa las gafas</span><h2>Ficha del paciente</h2><p>Información propia de la persona a la que acompaña Faro. No se mezcla con familiares, cuidadores ni personas reconocidas.</p></div></div>
+      <article class="card patient-card">
+        <form id="patient-form" class="form-grid">
+          <div class="patient-photo-block"><div class="avatar" id="patient-avatar">?</div><img id="patient-photo" class="person-photo" alt="Foto del paciente" hidden><div><strong>Perfil visual</strong><small id="patient-photo-status">Todavía no preparado.</small></div></div>
+          <div id="patient-saved-gallery" class="face-sample-gallery" hidden aria-label="Fotografías guardadas del paciente"></div>
+          <label>Nombre preferido<input name="preferred_name" required maxlength="80" autocomplete="name"></label>
+          <label>Nombre completo (opcional)<input name="full_name" maxlength="120" autocomplete="name"></label>
+          <label>Año de nacimiento (opcional)<input name="birth_year" type="number" min="1900" max="2100" inputmode="numeric"></label>
+          <label>Teléfono del paciente<input name="phone_e164" inputmode="tel" autocomplete="tel" placeholder="+34600111222"></label>
+          <fieldset class="form-grid"><legend>Domicilio habitual</legend>
+            <label>Dirección<input name="home_street_address" maxlength="200" autocomplete="street-address" placeholder="Calle, número, piso y puerta"></label>
+            <label>Código postal<input name="home_postal_code" maxlength="20" autocomplete="postal-code"></label>
+            <label>Localidad<input name="home_locality" maxlength="100" autocomplete="address-level2"></label>
+            <label>Provincia<input name="home_province" maxlength="100" autocomplete="address-level1"></label>
+            <label>País<input name="home_country" maxlength="100" autocomplete="country-name" value="España"></label>
+            <label>Indicaciones de acceso<textarea name="home_access_notes" maxlength="500" placeholder="Portal, timbre, referencias o barreras de movilidad"></textarea></label>
+            <label>Latitud verificada<input name="home_latitude" type="text" inputmode="decimal" placeholder="42,123456"></label>
+            <label>Longitud verificada<input name="home_longitude" type="text" inputmode="decimal" placeholder="-8,123456"></label>
+          </fieldset>
+          <label>Necesidades o condiciones conocidas<textarea name="conditions" maxlength="1000" placeholder="Una por línea: desorientación, movilidad, audición…"></textarea></label>
+          <label>Cómo prefiere que Faro se comunique<textarea name="communication_preferences" maxlength="1000" placeholder="Hablar despacio, usar frases cortas, llamar por su nombre…"></textarea></label>
+          <label>Indicaciones para una emergencia<textarea name="emergency_notes" maxlength="1000" placeholder="Cómo tranquilizarle y qué información es importante."></textarea></label>
+          <label>Rutinas y notas de acompañamiento<textarea name="care_notes" maxlength="2000" placeholder="Rutinas, preferencias y cosas que le ayudan."></textarea></label>
+          <section class="patient-camera" aria-labelledby="patient-camera-title">
+            <div class="patient-camera-heading"><div><strong id="patient-camera-title">Preparar reconocimiento</strong><small>Cinco imágenes claras del paciente</small></div><span id="patient-photo-count">0 / 5</span></div>
+            <div id="patient-photo-strip" class="patient-photo-strip" aria-live="polite"></div>
+            <p id="patient-photo-progress">Empieza con una foto frontal y bien iluminada.</p>
+            <div class="patient-photo-actions">
+              <label class="primary patient-photo-action">📷 <span>Hacer foto</span><input type="file" id="patient-camera-input" accept="image/*" capture="user"></label>
+              <label class="secondary patient-photo-action">▧ <span>Elegir de galería</span><input type="file" id="patient-gallery-input" accept="image/*" multiple></label>
+            </div>
+          </section>
+          <button class="primary">Guardar ficha del paciente</button>
+        </form>
+        <p id="patient-status" class="status-line">Ficha pendiente.</p>
+      </article>
+    </section>
+    <section id="people-view" class="view">
+      <div class="section-heading"><div><span class="kicker">Rostros de confianza</span><h2>Personas conocidas</h2><p>Haz cinco fotos claras de cada persona. Puedes usar la cámara del móvil directamente.</p></div><button id="show-person-form" class="primary">+ Añadir persona</button></div>
+      <div id="person-form-card" class="card form-card" hidden>
+        <div class="title-row"><h3>Nueva persona</h3><button type="button" class="icon-button" id="hide-person-form" aria-label="Cerrar">×</button></div>
+        <form id="person-form" class="form-grid"><label>Nombre conocido<input name="display_name" required maxlength="80" autocomplete="name" placeholder="Por ejemplo, Bibiana"></label><label>Relación<input name="relationship" required maxlength="80" placeholder="Hermana, vecino, cuidador…"></label><label class="check"><input name="consent_granted" type="checkbox" required><span>Confirmo que existe consentimiento explícito y revocable.</span></label><button class="primary">Crear y añadir fotos</button></form>
+      </div>
+      <div id="people" class="people-grid" aria-live="polite"></div>
+    </section>
+    <section id="reviews-view" class="view">
+      <div class="section-heading"><div><span class="kicker">Ayuda familiar</span><h2>Personas por aclarar</h2><p>Mira la fotografía y dinos quién es. Hasta confirmarlo, las gafas no dirán ningún nombre.</p></div><button id="refresh" class="secondary">Actualizar</button></div>
+      <div id="reviews" class="review-grid" aria-live="polite"></div>
+    </section>
+    <section id="care-view" class="view">
+      <div class="section-heading"><div><span class="kicker">Preparados para ayudar</span><h2>Familiares y cuidadores</h2><p>Esta red recibe los avisos de Faro. Cada contacto tiene un rol, una prioridad y su propio estado de alertas.</p></div></div>
+      <div class="care-grid">
+        <article class="card"><h3>Añadir a la red de cuidados</h3><p>El contacto se añade sin sustituir a quienes ya están configurados.</p><form id="care-contact-form"><label>Persona conocida vinculada (opcional)<select name="known_person_id" id="care-known-person"><option value="">Sin vincular</option></select></label><label>Nombre<input name="display_name" required maxlength="80" autocomplete="name"></label><label>Teléfono internacional<input name="phone_e164" required pattern="\+[1-9][0-9]{7,14}" inputmode="tel" autocomplete="tel" placeholder="+34600111222"></label><label>Teléfono alternativo<input name="alternate_phone_e164" pattern="\+[1-9][0-9]{7,14}" inputmode="tel" placeholder="+34600111333"></label><label>Dirección<input name="street_address" maxlength="200" autocomplete="street-address"></label><label>Código postal<input name="postal_code" maxlength="20" autocomplete="postal-code"></label><label>Localidad<input name="locality" maxlength="100" autocomplete="address-level2"></label><label>Provincia<input name="province" maxlength="100" autocomplete="address-level1"></label><label>Disponibilidad o indicaciones<textarea name="availability_notes" maxlength="500"></textarea></label><label>Rol<select name="role"><option value="family">Familiar</option><option value="caregiver">Cuidador</option></select></label><label>Prioridad<select name="priority"><option value="1">1 · Primero</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label><label class="check"><input name="whatsapp_consent" type="checkbox" required><span>Acepta recibir avisos de Faro por WhatsApp.</span></label><button class="primary">Añadir contacto</button></form></article>
+        <article class="card care-network-card"><h3>Red de cuidados</h3><p>Familiares y cuidadores que recibirán los avisos según su prioridad.</p><div id="care-contacts" class="care-contacts"></div><p id="contact-status" class="status-line">Configuración pendiente.</p></article>
+        <article class="card"><h3>Vincular otro cuidador</h3><p>Crea un código de un solo uso válido durante diez minutos.</p><label>Tipo de acceso<select id="pair-role"><option value="family">Familiar</option><option value="caregiver">Cuidador</option><option value="clinician">Profesional sanitario</option></select></label><button id="pair" class="secondary">Crear código</button><output id="pair-code" class="pair-code"></output></article>
+        <article class="card privacy-card"><h3>Datos de reconocimiento</h3><p>Las cinco fotografías preparan el reconocimiento. Desde esta versión se conserva una foto principal para verla en la ficha y poder sustituirla o eliminarla junto con la persona.</p><span id="plan">Precio fijo · interacciones ilimitadas</span></article>
+      </div>
+    </section>
+    <section id="memory-view" class="view">
+      <div class="section-heading"><div><span class="kicker">Historia cotidiana</span><h2>Memoria y conversaciones</h2><p>Una cronología privada para comprender lo ocurrido y ayudar a recordar, sin convertir cada detalle en una alarma.</p></div><div class="event-filters"><select id="event-filter" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option><option value="recognition">Personas reconocidas</option><option value="object_location">Objetos recordados</option><option value="hazard">Avisos preventivos</option><option value="help_request">Peticiones de ayuda</option><option value="location">Ubicación</option><option value="episode">Pérdidas de memoria</option><option value="conversation">Conversaciones</option></select><select id="severity-filter" aria-label="Filtrar por gravedad"><option value="">Cualquier gravedad</option><option value="info">Informativo</option><option value="attention">Atención</option><option value="urgent">Urgente</option></select><select id="delivery-filter" aria-label="Filtrar por aviso familiar"><option value="">Con o sin aviso</option><option value="sent">Familia avisada</option><option value="not_sent">Sin aviso familiar</option></select></div></div>
+      <article id="tracking-status" class="tracking-card" hidden></article>
+      <div id="events" class="timeline" aria-live="polite"></div>
+    </section>
+  </main>
+  <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir 5 fotos</span><input type="file" name="files" accept="image/jpeg,image/png" capture="user" multiple required></label><div class="file-hint">Frontal, con buena luz y sin otras personas.</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
+  <script src="/assets/app.js?v=11" defer></script>
+</body>
+</html>

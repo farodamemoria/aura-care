@@ -1,0 +1,24 @@
+.timeline article.urgent {
+  border-left-color: #d85c4f;
+  background: linear-gradient(90deg, #fff3f1, transparent 70%);
+  border-radius: 0 14px 14px 0;
+}
+
+.timeline article.urgent::before {
+  background: #d85c4f;
+}
+
+.timeline article.attention {
+  border-left-color: #d89a32;
+}
+
+.timeline article.attention::before {
+  background: #d89a32;
+}
+
+.event-details {
+  display: block;
+  margin-top: 7px;
+  color: #526c62;
+  font-weight: 700;
+}
