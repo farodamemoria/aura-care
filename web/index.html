@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/assets/people.css?v=1">
   <link rel="stylesheet" href="/assets/care.css?v=1">
   <link rel="stylesheet" href="/assets/patient.css?v=1">
+  <link rel="stylesheet" href="/assets/family.css?v=1">
 </head>
 <body>
   <header class="hero">
@@ -94,10 +95,22 @@
     <section id="memory-view" class="view">
       <div class="section-heading"><div><span class="kicker">Historia cotidiana</span><h2>Memoria y conversaciones</h2><p>Una cronología privada para comprender lo ocurrido y ayudar a recordar, sin convertir cada detalle en una alarma.</p></div><div class="event-filters"><select id="event-filter" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option><option value="recognition">Personas reconocidas</option><option value="object_location">Objetos recordados</option><option value="hazard">Avisos preventivos</option><option value="help_request">Peticiones de ayuda</option><option value="location">Ubicación</option><option value="episode">Pérdidas de memoria</option><option value="conversation">Conversaciones</option></select><select id="severity-filter" aria-label="Filtrar por gravedad"><option value="">Cualquier gravedad</option><option value="info">Informativo</option><option value="attention">Atención</option><option value="urgent">Urgente</option></select><select id="delivery-filter" aria-label="Filtrar por aviso familiar"><option value="">Con o sin aviso</option><option value="sent">Familia avisada</option><option value="not_sent">Sin aviso familiar</option></select></div></div>
       <article id="tracking-status" class="tracking-card" hidden></article>
+      <article class="card family-talk-card">
+        <div class="family-talk-heading">
+          <div><span class="kicker">Habla con Faro</span><h3>Pregunta por su día</h3><p>Habla o escribe: Faro responde con lo que ha acompañado hoy al paciente.</p></div>
+          <button id="talk-mic" class="primary talk-mic" type="button" aria-pressed="false">🎤 Hablar</button>
+        </div>
+        <form id="talk-form" class="family-talk-form">
+          <input id="talk-question" name="question" maxlength="500" placeholder="¿Cómo ha ido hoy?" autocomplete="off" required>
+          <button class="primary" type="submit">Preguntar</button>
+        </form>
+        <p id="talk-status" class="status-line" hidden></p>
+        <div id="talk-answer" class="family-talk-answer" aria-live="polite" hidden></div>
+      </article>
       <div id="events" class="timeline" aria-live="polite"></div>
     </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir 5 fotos</span><input type="file" name="files" accept="image/jpeg,image/png" capture="user" multiple required></label><div class="file-hint">Frontal, con buena luz y sin otras personas.</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
-  <script src="/assets/app.js?v=11" defer></script>
+  <script src="/assets/app.js?v=12" defer></script>
 </body>
 </html>

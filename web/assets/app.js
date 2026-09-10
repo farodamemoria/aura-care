@@ -292,4 +292,59 @@ document.querySelector('#care-contact-form').addEventListener('submit', async ev
 document.querySelector('#refresh').onclick = load;
 for (const filter of ['#event-filter', '#severity-filter', '#delivery-filter']) document.querySelector(filter).onchange = () => renderEvents(loadedEvents);
 document.querySelector('#pair').onclick = async () => { try { const invite = await api('/v1/pairing-invites', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({role: document.querySelector('#pair-role').value})}); document.querySelector('#pair-code').textContent = invite.code; } catch (error) { notify(error); } };
+
+const talkForm = document.querySelector('#talk-form');
+const talkInput = document.querySelector('#talk-question');
+const talkAnswer = document.querySelector('#talk-answer');
+const talkStatus = document.querySelector('#talk-status');
+const talkMic = document.querySelector('#talk-mic');
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const speechLanguages = {es: 'es-ES', gl: 'gl-ES', en: 'en-US'};
+
+function speakAnswer(text, language) {
+  if (!('speechSynthesis' in window) || !text) return;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = speechLanguages[language] || 'es-ES';
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+}
+
+async function askFaro(question) {
+  const text = String(question || '').trim();
+  if (text.length < 2) return notify(new Error('Escribe o di una pregunta.'));
+  talkAnswer.hidden = true; talkAnswer.textContent = '';
+  talkStatus.hidden = false; talkStatus.textContent = 'Faro está pensando…';
+  const button = talkForm.querySelector('button');
+  button.disabled = true;
+  try {
+    const answer = await api('/v1/family/ask', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question: text})});
+    talkAnswer.textContent = answer.answer;
+    talkAnswer.hidden = false;
+    talkStatus.hidden = true;
+    speakAnswer(answer.answer, answer.language);
+  } catch (error) { talkStatus.hidden = true; notify(error); }
+  finally { button.disabled = false; }
+}
+
+talkForm.addEventListener('submit', event => { event.preventDefault(); askFaro(talkInput.value); });
+
+if (SpeechRecognition) {
+  const recognition = new SpeechRecognition();
+  recognition.lang = 'es-ES';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  let listening = false;
+  const setListening = value => { listening = value; talkMic.setAttribute('aria-pressed', String(value)); talkMic.textContent = value ? '⏹ Escuchando…' : '🎤 Hablar'; };
+  recognition.addEventListener('result', event => { const transcript = event.results[0][0].transcript; talkInput.value = transcript; askFaro(transcript); });
+  recognition.addEventListener('end', () => setListening(false));
+  recognition.addEventListener('error', event => { setListening(false); if (event.error !== 'aborted' && event.error !== 'no-speech') notify(new Error('No se pudo escuchar. Prueba a escribir la pregunta.')); });
+  talkMic.addEventListener('click', () => {
+    if (listening) { recognition.stop(); return; }
+    try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); recognition.start(); setListening(true); }
+    catch (error) { setListening(false); }
+  });
+} else {
+  talkMic.hidden = true;
+}
+
 load();

@@ -255,6 +255,28 @@ class ConversationMemoryMatch(BaseModel):
     relevance: float = Field(ge=0)
 
 
+class FamilyQuestion(BaseModel):
+    question: str = Field(min_length=2, max_length=500)
+    language: Optional[str] = Field(default=None, pattern="^(es|gl|en)$")
+
+
+class FamilyAnswerSource(BaseModel):
+    event_id: UUID
+    kind: str
+    summary: str
+    occurred_at: datetime
+    speaker: Optional[str] = None
+
+
+class FamilyAnswer(BaseModel):
+    answer: str
+    language: str
+    generated_by: str = Field(pattern="^(openai|summary)$")
+    window_start: datetime
+    window_end: datetime
+    sources: list[FamilyAnswerSource] = Field(default_factory=list)
+
+
 class LocationPoint(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
@@ -886,6 +908,7 @@ def version() -> dict[str, object]:
             "family_alerts": True,
             "separate_patient_profile": True,
             "care_network_management": True,
+            "family_conversation": True,
         },
     }
 
@@ -1455,6 +1478,221 @@ def search_conversation_memory(
     if limit < 1 or limit > 20:
         raise HTTPException(status_code=422, detail="Limit must be between 1 and 20")
     return repository.search_conversations(query, limit)
+
+
+FAMILY_LANGUAGE_FALLBACK = "es"
+FAMILY_DAY_LABELS: dict[str, dict] = {
+    "es": {
+        "empty": "Hoy todavía no hay actividad registrada para el paciente.",
+        "header": "Hoy se han registrado {total} acontecimientos.",
+        "kinds": {
+            "conversation": ("{count} conversación con Faro", "{count} conversaciones con Faro"),
+            "recognition": ("{count} reconocimiento de personas", "{count} reconocimientos de personas"),
+            "help_request": ("{count} petición de ayuda", "{count} peticiones de ayuda"),
+            "hazard": ("{count} aviso preventivo", "{count} avisos preventivos"),
+            "episode": ("{count} posible pérdida de memoria", "{count} posibles pérdidas de memoria"),
+            "location": ("{count} actualización de ubicación", "{count} actualizaciones de ubicación"),
+            "object_location": ("{count} objeto recordado", "{count} objetos recordados"),
+            "caregiver_action": ("{count} acción de la familia", "{count} acciones de la familia"),
+            "routine": ("{count} rutina", "{count} rutinas"),
+            "system": ("{count} aviso del sistema", "{count} avisos del sistema"),
+        },
+        "recognized": "Se reconoció a {names}.",
+        "urgent": "Hay {count} aviso(s) importante(s) que conviene revisar.",
+        "closing": "Sin más incidencias destacables.",
+        "join": ", ",
+        "and": " y ",
+    },
+    "gl": {
+        "empty": "Hoxe aínda non hai actividade rexistrada para o paciente.",
+        "header": "Hoxe rexistráronse {total} acontecementos.",
+        "kinds": {
+            "conversation": ("{count} conversa con Faro", "{count} conversas con Faro"),
+            "recognition": ("{count} recoñecemento de persoas", "{count} recoñecementos de persoas"),
+            "help_request": ("{count} petición de axuda", "{count} peticións de axuda"),
+            "hazard": ("{count} aviso preventivo", "{count} avisos preventivos"),
+            "episode": ("{count} posible perda de memoria", "{count} posibles perdas de memoria"),
+            "location": ("{count} actualización de localización", "{count} actualizacións de localización"),
+            "object_location": ("{count} obxecto recordado", "{count} obxectos recordados"),
+            "caregiver_action": ("{count} acción da familia", "{count} accións da familia"),
+            "routine": ("{count} rutina", "{count} rutinas"),
+            "system": ("{count} aviso do sistema", "{count} avisos do sistema"),
+        },
+        "recognized": "Recoñeceuse a {names}.",
+        "urgent": "Hai {count} aviso(s) importante(s) que convén revisar.",
+        "closing": "Sen máis incidencias destacables.",
+        "join": ", ",
+        "and": " e ",
+    },
+    "en": {
+        "empty": "There is no activity registered for the patient today yet.",
+        "header": "{total} events were registered today.",
+        "kinds": {
+            "conversation": ("{count} conversation with Faro", "{count} conversations with Faro"),
+            "recognition": ("{count} person recognised", "{count} people recognised"),
+            "help_request": ("{count} help request", "{count} help requests"),
+            "hazard": ("{count} preventive warning", "{count} preventive warnings"),
+            "episode": ("{count} possible memory lapse", "{count} possible memory lapses"),
+            "location": ("{count} location update", "{count} location updates"),
+            "object_location": ("{count} remembered object", "{count} remembered objects"),
+            "caregiver_action": ("{count} family action", "{count} family actions"),
+            "routine": ("{count} routine", "{count} routines"),
+            "system": ("{count} system notice", "{count} system notices"),
+        },
+        "recognized": "Recognised {names}.",
+        "urgent": "There are {count} important notice(s) worth reviewing.",
+        "closing": "No other notable incidents.",
+        "join": ", ",
+        "and": " and ",
+    },
+}
+FAMILY_LANGUAGE_NAMES = {"es": "español", "gl": "gallego", "en": "inglés"}
+
+
+def family_language(requested: Optional[str]) -> str:
+    if requested in FAMILY_LANGUAGE_NAMES:
+        return requested
+    default = (os.getenv("AURA_FAMILY_LANGUAGE", FAMILY_LANGUAGE_FALLBACK) or "").lower()
+    return default if default in FAMILY_LANGUAGE_NAMES else FAMILY_LANGUAGE_FALLBACK
+
+
+def family_day_window(reference: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    """Local calendar day (start of day to now) converted to UTC."""
+    zone_name = os.getenv("AURA_FAMILY_TIMEZONE", "Europe/Madrid")
+    try:
+        from zoneinfo import ZoneInfo
+
+        zone = ZoneInfo(zone_name)
+    except Exception:
+        zone = timezone.utc
+    moment = (reference or now()).astimezone(zone)
+    start = moment.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    return start, moment.astimezone(timezone.utc)
+
+
+def family_day_events(start: datetime, end: datetime) -> list[Event]:
+    events = repository.list_events(500, None)
+    relevant = [
+        event for event in events
+        if start <= event.occurred_at <= end
+        and not (event.kind == "conversation" and is_transcription_artifact(event.summary))
+    ]
+    relevant.sort(key=lambda event: event.occurred_at)
+    return relevant
+
+
+def build_family_summary(events: list[Event], language: str) -> str:
+    labels = FAMILY_DAY_LABELS.get(language, FAMILY_DAY_LABELS[FAMILY_LANGUAGE_FALLBACK])
+    if not events:
+        return labels["empty"]
+    counts = Counter(event.kind for event in events)
+    parts = [labels["header"].format(total=len(events))]
+    details = []
+    for kind, count in counts.items():
+        forms = labels["kinds"].get(kind)
+        if not forms:
+            continue
+        template = forms[0] if count == 1 else forms[1]
+        details.append(template.format(count=count))
+    if details:
+        parts.append(labels["join"].join(details) + ".")
+    names: list[str] = []
+    for event in events:
+        if event.kind != "recognition":
+            continue
+        name = event.metadata.get("person_name") or event.metadata.get("display_name")
+        if isinstance(name, str) and name.strip() and name not in names:
+            names.append(name)
+    if names:
+        joined = labels["and"].join(names) if len(names) > 1 else names[0]
+        parts.append(labels["recognized"].format(names=joined))
+    urgent = sum(1 for event in events if event.severity in {"attention", "urgent"})
+    if urgent:
+        parts.append(labels["urgent"].format(count=urgent))
+    parts.append(labels["closing"])
+    return " ".join(parts)
+
+
+def openai_family_answer(question: str, events: list[Event], language: str) -> Optional[str]:
+    api_key = os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    lines: list[str] = []
+    for event in events:
+        speaker = event.metadata.get("speaker")
+        speaker_label = f" [{speaker}]" if speaker else ""
+        lines.append(f"- {event.occurred_at.isoformat()} · {event.kind}{speaker_label}: {event.summary}")
+    context = "\n".join(lines) if lines else "(sin eventos registrados hoy)"
+    instructions = (
+        "Eres Faro, el asistente de Faro da Memoria, y respondes a un familiar o cuidador "
+        "que pregunta por el día del paciente. Responde en "
+        f"{FAMILY_LANGUAGE_NAMES.get(language, 'español')}, con tono cercano, claro y breve "
+        "(máximo 6 frases). Básate SOLO en los eventos proporcionados; si la información no "
+        "aparece, dilo con naturalidad. No des consejos médicos ni alarmes sin motivo y no "
+        "inventes datos."
+    )
+    payload = json.dumps({
+        "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
+        "instructions": instructions,
+        "input": [{
+            "role": "user",
+            "content": [{"type": "input_text", "text": f"Pregunta del familiar: {question}\n\nEventos de hoy:\n{context}"}],
+        }],
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=payload,
+        method="POST",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        body = json.loads(response.read())
+    for item in body.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content", []):
+            if isinstance(content, dict) and content.get("type") == "output_text":
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+    return None
+
+
+@app.post("/v1/family/ask", response_model=FamilyAnswer)
+def ask_family_question(
+    request: FamilyQuestion, authorization: Optional[str] = Header(default=None),
+) -> FamilyAnswer:
+    require_auth(authorization)
+    question = request.question.strip()
+    if len(question) < 2:
+        raise HTTPException(status_code=422, detail="Question is too short")
+    language = family_language(request.language)
+    start, end = family_day_window()
+    events = family_day_events(start, end)
+    generated_by = "summary"
+    answer: Optional[str] = None
+    try:
+        answer = openai_family_answer(question, events, language)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
+        answer = None
+    if answer:
+        generated_by = "openai"
+    else:
+        answer = build_family_summary(events, language)
+    sources = [
+        FamilyAnswerSource(
+            event_id=event.id,
+            kind=event.kind,
+            summary=event.summary,
+            occurred_at=event.occurred_at,
+            speaker=(str(event.metadata["speaker"]) if event.metadata.get("speaker") else None),
+        )
+        for event in events[-10:]
+    ]
+    return FamilyAnswer(
+        answer=answer, language=language, generated_by=generated_by,
+        window_start=start, window_end=end, sources=sources,
+    )
 
 
 @app.post("/v1/pairing-invites", response_model=PairingInvite, status_code=201)
