@@ -1999,6 +1999,24 @@ def family_intent(question: str) -> Optional[str]:
     return None
 
 
+FAMILY_CLOSERS = {
+    "no gracias", "nada mas", "muchas gracias", "gracias", "eso es todo", "hasta luego",
+    "adios", "adios gracias", "ok gracias", "vale gracias", "perfecto gracias", "ninguna mas",
+    "no nada mas", "nada mas gracias", "si gracias",
+}
+FAMILY_CLOSERS_REPLY = {
+    "es": "De nada. Aquí estoy cuando me necesites.",
+    "gl": "De nada. Aquí estou cando me necesites.",
+    "en": "You're welcome. I'm here whenever you need me.",
+}
+
+
+def family_is_closing(text: str) -> bool:
+    normalized = re.sub(r"[^\w\s]", " ", normalize_memory_text(text))
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized in FAMILY_CLOSERS
+
+
 def family_day_events(start: datetime, end: datetime) -> list[Event]:
     events = repository.list_events(500, None)
     relevant = [
@@ -2142,7 +2160,8 @@ def openai_family_answer(
         "preguntes ni prometas ninguna otra función (informes periódicos o diarios, resúmenes "
         "programados, recordatorios, horarios, tareas recurrentes, envíos a demanda, etc.) porque "
         "NO existen. Si el familiar pide algo que no puedes hacer, dilo con claridad y ofrece solo "
-        "lo que sí puedes."
+        "lo que sí puedes. Si el familiar solo se despide, agradece o dice que no necesita nada "
+        "más, responde en UNA sola frase breve y cordial y NO repitas el resumen del día."
     )
     user_text = f"Pregunta del familiar: {question}\n\nEventos de {day_label}:\n{context}"
     if transcript:
@@ -2205,6 +2224,13 @@ def ask_family_question(
     target = family_target_date(question)
     day_label = family_day_label(target, language)
     start, end = family_day_window(target)
+    if family_is_closing(question):
+        answer = FAMILY_CLOSERS_REPLY.get(language, FAMILY_CLOSERS_REPLY["es"])
+        repository.add_family_message(conversation_id, "assistant", answer)
+        return FamilyAnswer(
+            answer=answer, language=language, generated_by="summary",
+            window_start=start, window_end=end, conversation_id=conversation_id, sources=[],
+        )
     events = family_day_events(start, end)
     generated_by = "summary"
     answer: Optional[str] = None
