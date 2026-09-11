@@ -909,6 +909,7 @@ def version() -> dict[str, object]:
             "separate_patient_profile": True,
             "care_network_management": True,
             "family_conversation": True,
+            "family_ai": bool(os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")),
         },
     }
 
@@ -1547,6 +1548,93 @@ FAMILY_DAY_LABELS: dict[str, dict] = {
     },
 }
 FAMILY_LANGUAGE_NAMES = {"es": "español", "gl": "gallego", "en": "inglés"}
+FAMILY_INTENTS: dict[str, set[str]] = {
+    "warnings": {"hazard", "help_request", "episode"},
+    "recognitions": {"recognition"},
+    "conversations": {"conversation"},
+    "location": {"location"},
+    "objects": {"object_location"},
+    "help": {"help_request"},
+    "memory": {"episode"},
+}
+FAMILY_INTENT_KEYWORDS: dict[str, set[str]] = {
+    "warnings": {"aviso", "alerta", "alert", "peligro", "perigo", "riesgo", "urxen", "urgen", "inciden", "warning", "danger"},
+    "recognitions": {"reconoc", "recoñec", "quien", "quién", "quen", "vio", "viu", "visita", "persona", "people", "recognis", "recogniz"},
+    "conversations": {"convers", "conversa", "habl", "fala", "dijo", "dixo", "conto", "contó", "chat", "talk"},
+    "location": {"ubicaci", "localiz", "donde", "dónde", "onde", "location", "gps"},
+    "objects": {"objeto", "obxecto", "llave", "chave", "gafas", "perdido", "perdeu", "encontr", "object", "keys"},
+    "help": {"ayuda", "axuda", "socorro", "help", "auxilio"},
+    "memory": {"memoria", "olvid", "esque", "episodio", "desorient", "memory"},
+}
+FAMILY_FOCUSED_LABELS: dict[str, dict] = {
+    "es": {
+        "warnings": ("Hoy hay {count} aviso de seguridad:", "Hoy hay {count} avisos de seguridad:"),
+        "recognitions": ("Hoy se reconoció a {count} persona:", "Hoy se reconocieron {count} personas:"),
+        "conversations": ("Hoy hay {count} conversación:", "Hoy hay {count} conversaciones:"),
+        "location": ("Hoy hay {count} actualización de ubicación:", "Hoy hay {count} actualizaciones de ubicación:"),
+        "objects": ("Hoy hay {count} objeto recordado:", "Hoy hay {count} objetos recordados:"),
+        "help": ("Hoy hay {count} petición de ayuda:", "Hoy hay {count} peticiones de ayuda:"),
+        "memory": ("Hoy hay {count} posible pérdida de memoria:", "Hoy hay {count} posibles pérdidas de memoria:"),
+        "none": {
+            "warnings": "Hoy no se ha registrado ningún aviso de seguridad.",
+            "recognitions": "Hoy no se ha reconocido a nadie.",
+            "conversations": "Hoy no hay conversaciones registradas.",
+            "location": "Hoy no hay actualizaciones de ubicación.",
+            "objects": "Hoy no se ha recordado ningún objeto.",
+            "help": "Hoy no ha habido peticiones de ayuda.",
+            "memory": "Hoy no se ha registrado ninguna pérdida de memoria.",
+        },
+        "line": "{time} — {summary}",
+    },
+    "gl": {
+        "warnings": ("Hoxe hai {count} aviso de seguridade:", "Hoxe hai {count} avisos de seguridade:"),
+        "recognitions": ("Hoxe recoñeceuse a {count} persoa:", "Hoxe recoñecéronse {count} persoas:"),
+        "conversations": ("Hoxe hai {count} conversa:", "Hoxe hai {count} conversas:"),
+        "location": ("Hoxe hai {count} actualización de localización:", "Hoxe hai {count} actualizacións de localización:"),
+        "objects": ("Hoxe hai {count} obxecto recordado:", "Hoxe hai {count} obxectos recordados:"),
+        "help": ("Hoxe hai {count} petición de axuda:", "Hoxe hai {count} peticións de axuda:"),
+        "memory": ("Hoxe hai {count} posible perda de memoria:", "Hoxe hai {count} posibles perdas de memoria:"),
+        "none": {
+            "warnings": "Hoxe non se rexistrou ningún aviso de seguridade.",
+            "recognitions": "Hoxe non se recoñeceu a ninguén.",
+            "conversations": "Hoxe non hai conversas rexistradas.",
+            "location": "Hoxe non hai actualizacións de localización.",
+            "objects": "Hoxe non se recordou ningún obxecto.",
+            "help": "Hoxe non houbo peticións de axuda.",
+            "memory": "Hoxe non se rexistrou ningunha perda de memoria.",
+        },
+        "line": "{time} — {summary}",
+    },
+    "en": {
+        "warnings": ("There is {count} safety warning today:", "There are {count} safety warnings today:"),
+        "recognitions": ("{count} person was recognised today:", "{count} people were recognised today:"),
+        "conversations": ("There is {count} conversation today:", "There are {count} conversations today:"),
+        "location": ("There is {count} location update today:", "There are {count} location updates today:"),
+        "objects": ("There is {count} remembered object today:", "There are {count} remembered objects today:"),
+        "help": ("There is {count} help request today:", "There are {count} help requests today:"),
+        "memory": ("There is {count} possible memory lapse today:", "There are {count} possible memory lapses today:"),
+        "none": {
+            "warnings": "No safety warnings have been registered today.",
+            "recognitions": "No one has been recognised today.",
+            "conversations": "There are no conversations registered today.",
+            "location": "There are no location updates today.",
+            "objects": "No objects have been remembered today.",
+            "help": "There have been no help requests today.",
+            "memory": "No memory lapses have been registered today.",
+        },
+        "line": "{time} — {summary}",
+    },
+}
+
+
+def family_zone():
+    zone_name = os.getenv("AURA_FAMILY_TIMEZONE", "Europe/Madrid")
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(zone_name)
+    except Exception:
+        return timezone.utc
 
 
 def family_language(requested: Optional[str]) -> str:
@@ -1558,16 +1646,22 @@ def family_language(requested: Optional[str]) -> str:
 
 def family_day_window(reference: Optional[datetime] = None) -> tuple[datetime, datetime]:
     """Local calendar day (start of day to now) converted to UTC."""
-    zone_name = os.getenv("AURA_FAMILY_TIMEZONE", "Europe/Madrid")
-    try:
-        from zoneinfo import ZoneInfo
-
-        zone = ZoneInfo(zone_name)
-    except Exception:
-        zone = timezone.utc
+    zone = family_zone()
     moment = (reference or now()).astimezone(zone)
     start = moment.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     return start, moment.astimezone(timezone.utc)
+
+
+def family_time_label(moment: datetime) -> str:
+    return moment.astimezone(family_zone()).strftime("%H:%M")
+
+
+def family_intent(question: str) -> Optional[str]:
+    normalized = normalize_memory_text(question)
+    for intent, keywords in FAMILY_INTENT_KEYWORDS.items():
+        if any(keyword in normalized for keyword in keywords):
+            return intent
+    return None
 
 
 def family_day_events(start: datetime, end: datetime) -> list[Event]:
@@ -1581,8 +1675,21 @@ def family_day_events(start: datetime, end: datetime) -> list[Event]:
     return relevant
 
 
-def build_family_summary(events: list[Event], language: str) -> str:
+def build_family_summary(events: list[Event], language: str, question: str = "") -> str:
     labels = FAMILY_DAY_LABELS.get(language, FAMILY_DAY_LABELS[FAMILY_LANGUAGE_FALLBACK])
+    focused_labels = FAMILY_FOCUSED_LABELS.get(language, FAMILY_FOCUSED_LABELS[FAMILY_LANGUAGE_FALLBACK])
+    intent = family_intent(question)
+    if intent:
+        kinds = FAMILY_INTENTS[intent]
+        focused = [event for event in events if event.kind in kinds]
+        if not focused:
+            return focused_labels["none"][intent]
+        header = focused_labels[intent][0] if len(focused) == 1 else focused_labels[intent][1]
+        lines = [
+            focused_labels["line"].format(time=family_time_label(event.occurred_at), summary=event.summary)
+            for event in focused[:12]
+        ]
+        return header.format(count=len(focused)) + " " + "; ".join(lines)
     if not events:
         return labels["empty"]
     counts = Counter(event.kind for event in events)
@@ -1617,19 +1724,25 @@ def openai_family_answer(question: str, events: list[Event], language: str) -> O
     api_key = os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
+    profile = repository.get_patient_profile()
+    patient_name = profile.preferred_name if profile and profile.preferred_name else "el paciente"
     lines: list[str] = []
     for event in events:
         speaker = event.metadata.get("speaker")
         speaker_label = f" [{speaker}]" if speaker else ""
-        lines.append(f"- {event.occurred_at.isoformat()} · {event.kind}{speaker_label}: {event.summary}")
+        moment = event.occurred_at.astimezone(family_zone()).strftime("%H:%M")
+        lines.append(f"- {moment} · {event.kind}{speaker_label}: {event.summary}")
     context = "\n".join(lines) if lines else "(sin eventos registrados hoy)"
+    today = now().astimezone(family_zone()).strftime("%d/%m/%Y")
     instructions = (
         "Eres Faro, el asistente de Faro da Memoria, y respondes a un familiar o cuidador "
-        "que pregunta por el día del paciente. Responde en "
+        f"que pregunta por el día de {patient_name}. Hoy es {today}. Responde en "
         f"{FAMILY_LANGUAGE_NAMES.get(language, 'español')}, con tono cercano, claro y breve "
-        "(máximo 6 frases). Básate SOLO en los eventos proporcionados; si la información no "
-        "aparece, dilo con naturalidad. No des consejos médicos ni alarmes sin motivo y no "
-        "inventes datos."
+        "(máximo 6 frases). Responde de forma CONCRETA a lo que se te pregunta: si preguntan "
+        "por avisos, di cuáles y cuándo; si preguntan por personas, di quién; si preguntan por "
+        "una conversación, resume lo dicho. Básate SOLO en los eventos proporcionados; si la "
+        "información no aparece, dilo con naturalidad. No des consejos médicos ni alarmes sin "
+        "motivo y no inventes datos."
     )
     payload = json.dumps({
         "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
@@ -1678,7 +1791,7 @@ def ask_family_question(
     if answer:
         generated_by = "openai"
     else:
-        answer = build_family_summary(events, language)
+        answer = build_family_summary(events, language, question)
     sources = [
         FamilyAnswerSource(
             event_id=event.id,

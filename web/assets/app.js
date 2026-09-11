@@ -328,6 +328,17 @@ async function askFaro(question) {
 
 talkForm.addEventListener('submit', event => { event.preventDefault(); askFaro(talkInput.value); });
 
+const microphoneMessage = 'Necesitas permitir el micrófono. En la app instalada, abre Ajustes del teléfono → Aplicaciones → Faro → Permisos → Micrófono, y vuelve a intentarlo.';
+
+async function requestMicrophone() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    stream.getTracks().forEach(track => track.stop());
+    return true;
+  } catch (error) { return false; }
+}
+
 if (SpeechRecognition) {
   const recognition = new SpeechRecognition();
   recognition.lang = 'es-ES';
@@ -337,9 +348,15 @@ if (SpeechRecognition) {
   const setListening = value => { listening = value; talkMic.setAttribute('aria-pressed', String(value)); talkMic.textContent = value ? '⏹ Escuchando…' : '🎤 Hablar'; };
   recognition.addEventListener('result', event => { const transcript = event.results[0][0].transcript; talkInput.value = transcript; askFaro(transcript); });
   recognition.addEventListener('end', () => setListening(false));
-  recognition.addEventListener('error', event => { setListening(false); if (event.error !== 'aborted' && event.error !== 'no-speech') notify(new Error('No se pudo escuchar. Prueba a escribir la pregunta.')); });
-  talkMic.addEventListener('click', () => {
+  recognition.addEventListener('error', event => {
+    setListening(false);
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') return notify(new Error(microphoneMessage));
+    if (event.error !== 'aborted' && event.error !== 'no-speech') notify(new Error('No se pudo escuchar. Prueba a escribir la pregunta.'));
+  });
+  talkMic.addEventListener('click', async () => {
     if (listening) { recognition.stop(); return; }
+    const granted = await requestMicrophone();
+    if (!granted) return notify(new Error(microphoneMessage));
     try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); recognition.start(); setListening(true); }
     catch (error) { setListening(false); }
   });
