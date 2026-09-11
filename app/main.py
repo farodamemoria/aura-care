@@ -6,7 +6,7 @@ import base64
 import binascii
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Annotated, Optional, Protocol, Union
@@ -1644,12 +1644,80 @@ def family_language(requested: Optional[str]) -> str:
     return default if default in FAMILY_LANGUAGE_NAMES else FAMILY_LANGUAGE_FALLBACK
 
 
-def family_day_window(reference: Optional[datetime] = None) -> tuple[datetime, datetime]:
-    """Local calendar day (start of day to now) converted to UTC."""
+SPANISH_MONTHS = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setembro": 9, "octubre": 10,
+    "noviembre": 11, "novembro": 11, "diciembre": 12, "decembro": 12,
+}
+MONTH_NAMES = {
+    "es": ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
+    "gl": ["xaneiro", "febreiro", "marzo", "abril", "maio", "xuño", "xullo", "agosto", "setembro", "outubro", "novembro", "decembro"],
+    "en": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+}
+
+
+def family_target_date(question: str) -> date:
+    """Resolve which local calendar day the question refers to (defaults to today)."""
+    today = now().astimezone(family_zone()).date()
+    normalized = normalize_memory_text(question)
+    if any(word in normalized for word in ("anteayer", "antonte", "antes de onte")):
+        return today - timedelta(days=2)
+    if any(word in normalized for word in ("ayer", "onte", "yesterday")):
+        return today - timedelta(days=1)
+    match = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", normalized)
+    if match:
+        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            return date(year, month, day)
+        except ValueError:
+            pass
+    match = re.search(r"(\d{1,2})\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?", normalized)
+    if match:
+        month = SPANISH_MONTHS.get(match.group(2))
+        year = int(match.group(3)) if match.group(3) else today.year
+        if month:
+            try:
+                return date(year, month, int(match.group(1)))
+            except ValueError:
+                pass
+    return today
+
+
+def family_day_label(target: date, language: str) -> str:
+    today = now().astimezone(family_zone()).date()
+    current, previous = {"es": ("hoy", "ayer"), "gl": ("hoxe", "onte"), "en": ("today", "yesterday")}.get(
+        language, ("hoy", "ayer")
+    )
+    if target == today:
+        return current
+    if target == today - timedelta(days=1):
+        return previous
+    months = MONTH_NAMES.get(language, MONTH_NAMES["es"])
+    if language == "en":
+        return f"on {months[target.month - 1]} {target.day}, {target.year}"
+    prefix = "o" if language == "gl" else "el"
+    return f"{prefix} {target.day} de {months[target.month - 1]} de {target.year}"
+
+
+def localize_day(text: str, day_label: str, language: str) -> str:
+    capitalized = day_label[:1].upper() + day_label[1:]
+    if language == "gl":
+        return text.replace("Hoxe ", capitalized + " ").replace("Hoxe", capitalized)
+    if language == "en":
+        return text.replace("today", day_label)
+    return text.replace("Hoy ", capitalized + " ").replace("Hoy", capitalized)
+
+
+def family_day_window(target: date) -> tuple[datetime, datetime]:
+    """UTC window for the requested local calendar day (up to now when it is today)."""
     zone = family_zone()
-    moment = (reference or now()).astimezone(zone)
-    start = moment.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-    return start, moment.astimezone(timezone.utc)
+    start_local = datetime(target.year, target.month, target.day, tzinfo=zone)
+    end_local = start_local + timedelta(days=1)
+    current = now().astimezone(zone)
+    end = min(end_local, current) if target == current.date() else end_local
+    return start_local.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
 def family_time_label(moment: datetime) -> str:
@@ -1675,7 +1743,7 @@ def family_day_events(start: datetime, end: datetime) -> list[Event]:
     return relevant
 
 
-def build_family_summary(events: list[Event], language: str, question: str = "") -> str:
+def build_family_summary(events: list[Event], language: str, question: str = "", day_label: str = "hoy") -> str:
     labels = FAMILY_DAY_LABELS.get(language, FAMILY_DAY_LABELS[FAMILY_LANGUAGE_FALLBACK])
     focused_labels = FAMILY_FOCUSED_LABELS.get(language, FAMILY_FOCUSED_LABELS[FAMILY_LANGUAGE_FALLBACK])
     intent = family_intent(question)
@@ -1683,17 +1751,19 @@ def build_family_summary(events: list[Event], language: str, question: str = "")
         kinds = FAMILY_INTENTS[intent]
         focused = [event for event in events if event.kind in kinds]
         if not focused:
-            return focused_labels["none"][intent]
-        header = focused_labels[intent][0] if len(focused) == 1 else focused_labels[intent][1]
+            return localize_day(focused_labels["none"][intent], day_label, language)
+        header = localize_day(
+            focused_labels[intent][0] if len(focused) == 1 else focused_labels[intent][1], day_label, language
+        )
         lines = [
             focused_labels["line"].format(time=family_time_label(event.occurred_at), summary=event.summary)
             for event in focused[:12]
         ]
         return header.format(count=len(focused)) + " " + "; ".join(lines)
     if not events:
-        return labels["empty"]
+        return localize_day(labels["empty"], day_label, language)
     counts = Counter(event.kind for event in events)
-    parts = [labels["header"].format(total=len(events))]
+    parts = [localize_day(labels["header"], day_label, language).format(total=len(events))]
     details = []
     for kind, count in counts.items():
         forms = labels["kinds"].get(kind)
@@ -1720,7 +1790,7 @@ def build_family_summary(events: list[Event], language: str, question: str = "")
     return " ".join(parts)
 
 
-def openai_family_answer(question: str, events: list[Event], language: str) -> Optional[str]:
+def openai_family_answer(question: str, events: list[Event], language: str, day_label: str = "hoy") -> Optional[str]:
     api_key = os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
@@ -1732,11 +1802,12 @@ def openai_family_answer(question: str, events: list[Event], language: str) -> O
         speaker_label = f" [{speaker}]" if speaker else ""
         moment = event.occurred_at.astimezone(family_zone()).strftime("%H:%M")
         lines.append(f"- {moment} · {event.kind}{speaker_label}: {event.summary}")
-    context = "\n".join(lines) if lines else "(sin eventos registrados hoy)"
+    context = "\n".join(lines) if lines else "(sin eventos registrados en ese día)"
     today = now().astimezone(family_zone()).strftime("%d/%m/%Y")
     instructions = (
         "Eres Faro, el asistente de Faro da Memoria, y respondes a un familiar o cuidador "
-        f"que pregunta por el día de {patient_name}. Hoy es {today}. Responde en "
+        f"que pregunta por el día de {patient_name}. Hoy es {today}. Los eventos que recibes "
+        f"corresponden al día consultado ({day_label}). Responde en "
         f"{FAMILY_LANGUAGE_NAMES.get(language, 'español')}, con tono cercano, claro y breve "
         "(máximo 6 frases). Responde de forma CONCRETA a lo que se te pregunta: si preguntan "
         "por avisos, di cuáles y cuándo; si preguntan por personas, di quién; si preguntan por "
@@ -1749,7 +1820,7 @@ def openai_family_answer(question: str, events: list[Event], language: str) -> O
         "instructions": instructions,
         "input": [{
             "role": "user",
-            "content": [{"type": "input_text", "text": f"Pregunta del familiar: {question}\n\nEventos de hoy:\n{context}"}],
+            "content": [{"type": "input_text", "text": f"Pregunta del familiar: {question}\n\nEventos de {day_label}:\n{context}"}],
         }],
     }).encode("utf-8")
     request = urllib.request.Request(
@@ -1780,18 +1851,20 @@ def ask_family_question(
     if len(question) < 2:
         raise HTTPException(status_code=422, detail="Question is too short")
     language = family_language(request.language)
-    start, end = family_day_window()
+    target = family_target_date(question)
+    day_label = family_day_label(target, language)
+    start, end = family_day_window(target)
     events = family_day_events(start, end)
     generated_by = "summary"
     answer: Optional[str] = None
     try:
-        answer = openai_family_answer(question, events, language)
+        answer = openai_family_answer(question, events, language, day_label)
     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
         answer = None
     if answer:
         generated_by = "openai"
     else:
-        answer = build_family_summary(events, language, question)
+        answer = build_family_summary(events, language, question, day_label)
     sources = [
         FamilyAnswerSource(
             event_id=event.id,
