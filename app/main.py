@@ -2064,7 +2064,8 @@ FAMILY_ALERT_TOOL = {
         "Registra un aviso automático por WhatsApp a la red de cuidados cuando el paciente "
         "manifieste algo concreto (por ejemplo dolor, empeoramiento, caída). Úsala SOLO cuando "
         "el familiar pida explícitamente que se le avise ante algo, o confirme con un 'sí' una "
-        "propuesta tuya de avisar."
+        "propuesta tuya de avisar. Solo define palabras clave que disparan un aviso cuando el "
+        "paciente las dice; NO sirve para programar informes, horarios ni tareas recurrentes."
     ),
     "parameters": {
         "type": "object",
@@ -2135,7 +2136,13 @@ def openai_family_answer(
         "No des consejos médicos ni alarmes sin motivo y no inventes datos. Si el familiar pide "
         "que se le avise ante algo concreto (o confirma con un 'sí' una propuesta tuya de avisar), "
         "llama a la herramienta registrar_aviso con una descripción breve y las palabras clave, y "
-        "confírmale que el aviso queda activo por WhatsApp."
+        "confírmale que el aviso queda activo por WhatsApp. "
+        "IMPORTANTE: tus ÚNICAS capacidades son (1) responder preguntas sobre los eventos del "
+        "paciente y (2) registrar avisos automáticos por WhatsApp ante palabras clave. NO ofrezcas, "
+        "preguntes ni prometas ninguna otra función (informes periódicos o diarios, resúmenes "
+        "programados, recordatorios, horarios, tareas recurrentes, envíos a demanda, etc.) porque "
+        "NO existen. Si el familiar pide algo que no puedes hacer, dilo con claridad y ofrece solo "
+        "lo que sí puedes."
     )
     user_text = f"Pregunta del familiar: {question}\n\nEventos de {day_label}:\n{context}"
     if transcript:
