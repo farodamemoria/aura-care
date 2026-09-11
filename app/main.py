@@ -904,6 +904,26 @@ def download_faro_app() -> FileResponse:
     )
 
 
+TWA_ASSET_LINKS = [{
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+        "namespace": "android_app",
+        "package_name": os.getenv("AURA_TWA_PACKAGE", "com.farodamemoria.familia"),
+        "sha256_cert_fingerprints": [
+            os.getenv(
+                "AURA_TWA_SHA256",
+                "82:F0:DB:14:BC:D0:14:22:7F:CE:49:4B:8E:A9:00:E6:03:C6:84:6B:E9:D4:0E:70:9E:A8:4F:63:D2:16:03:98",
+            )
+        ],
+    },
+}]
+
+
+@app.get("/.well-known/assetlinks.json", include_in_schema=False)
+def asset_links() -> Response:
+    return Response(content=json.dumps(TWA_ASSET_LINKS), media_type="application/json")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "aura-backend", "face_provider": type(face_provider).__name__, "alert_provider": type(alert_provider).__name__, "api_version": API_VERSION}
