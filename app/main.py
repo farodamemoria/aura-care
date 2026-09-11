@@ -588,6 +588,10 @@ class InMemoryRepository:
             content TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
         self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_family_messages ON family_messages(conversation_id, created_at)")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS whatsapp_status (
+            wamid TEXT PRIMARY KEY, status TEXT NOT NULL, recipient TEXT,
+            errors TEXT, updated_at TEXT NOT NULL
+        )""")
         self.event_db.commit()
         for row in self.event_db.execute("SELECT * FROM memories ORDER BY created_at ASC").fetchall():
             memory = Memory(
@@ -709,6 +713,14 @@ class InMemoryRepository:
             self.event_db.execute(
                 "UPDATE events SET metadata_json=? WHERE id=?",
                 (json.dumps(metadata, ensure_ascii=False), str(event_id)),
+            )
+            self.event_db.commit()
+
+    def record_whatsapp_status(self, wamid: str, status: str, recipient: str, errors: str) -> None:
+        with self.lock:
+            self.event_db.execute(
+                "INSERT OR REPLACE INTO whatsapp_status VALUES (?, ?, ?, ?, ?)",
+                (wamid, status, recipient, errors, now().isoformat()),
             )
             self.event_db.commit()
 
@@ -1348,6 +1360,47 @@ def test_family_alert(authorization: Optional[str] = Header(default=None)) -> di
         "delivered": [{"name": contact.display_name, "message_id": delivery.message_id} for contact, delivery in deliveries],
         "failures": failures,
     }
+
+
+WHATSAPP_VERIFY_TOKEN = os.getenv("AURA_WHATSAPP_VERIFY_TOKEN", "faro-whatsapp-verify")
+
+
+@app.get("/v1/whatsapp/webhook", include_in_schema=False)
+def whatsapp_webhook_verify(request: Request) -> Response:
+    params = request.query_params
+    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == WHATSAPP_VERIFY_TOKEN:
+        return Response(content=params.get("hub.challenge", ""), media_type="text/plain")
+    raise HTTPException(status_code=403, detail="Invalid verify token")
+
+
+@app.post("/v1/whatsapp/webhook", include_in_schema=False)
+async def whatsapp_webhook(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "ignored"}
+    for entry in payload.get("entry", []) or []:
+        for change in entry.get("changes", []) or []:
+            value = change.get("value", {}) or {}
+            for status_item in value.get("statuses", []) or []:
+                repository.record_whatsapp_status(
+                    wamid=str(status_item.get("id", "")),
+                    status=str(status_item.get("status", "")),
+                    recipient=str(status_item.get("recipient_id", "")),
+                    errors=json.dumps(status_item.get("errors", []), ensure_ascii=False),
+                )
+    return {"status": "ok"}
+
+
+@app.get("/v1/whatsapp/statuses")
+def list_whatsapp_statuses(limit: int = 50, authorization: Optional[str] = Header(default=None)) -> list[dict]:
+    require_auth(authorization)
+    bounded = min(max(limit, 1), 200)
+    rows = repository.event_db.execute(
+        "SELECT wamid, status, recipient, errors, updated_at FROM whatsapp_status ORDER BY updated_at DESC LIMIT ?",
+        (bounded,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def refresh_location_session(session: LocationSession) -> LocationSession:
