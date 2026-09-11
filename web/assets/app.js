@@ -299,15 +299,21 @@ const talkAnswer = document.querySelector('#talk-answer');
 const talkStatus = document.querySelector('#talk-status');
 const talkMic = document.querySelector('#talk-mic');
 const talkReset = document.querySelector('#talk-reset');
+let conversationMode = false;
+let startListening = null;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const speechLanguages = {es: 'es-ES', gl: 'gl-ES', en: 'en-US'};
 
 function speakAnswer(text, language) {
-  if (!('speechSynthesis' in window) || !text) return;
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = speechLanguages[language] || 'es-ES';
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(utterance);
+  return new Promise(resolve => {
+    if (!('speechSynthesis' in window) || !text) return resolve();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = speechLanguages[language] || 'es-ES';
+    utterance.onend = () => resolve();
+    utterance.onerror = () => resolve();
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  });
 }
 
 async function askFaro(question) {
@@ -325,7 +331,8 @@ async function askFaro(question) {
     talkAnswer.hidden = false;
     if (talkReset) talkReset.hidden = false;
     talkStatus.hidden = true;
-    speakAnswer(answer.answer, answer.language);
+    await speakAnswer(answer.answer, answer.language);
+    if (conversationMode && startListening) startListening();
   } catch (error) { talkStatus.hidden = true; notify(error); }
   finally { button.disabled = false; }
 }
@@ -349,20 +356,33 @@ if (SpeechRecognition) {
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   let listening = false;
-  const setListening = value => { listening = value; talkMic.setAttribute('aria-pressed', String(value)); talkMic.textContent = value ? '⏹ Escuchando…' : '🎤 Hablar'; };
-  recognition.addEventListener('result', event => { const transcript = event.results[0][0].transcript; talkInput.value = transcript; askFaro(transcript); });
+  const updateMic = () => {
+    talkMic.setAttribute('aria-pressed', String(conversationMode));
+    talkMic.textContent = conversationMode ? (listening ? '⏹ Escuchando…' : '🎤 Hablar') : '🎤 Hablar';
+  };
+  const setListening = value => { listening = value; updateMic(); };
+  startListening = async () => {
+    const granted = await requestMicrophone();
+    if (!granted) { conversationMode = false; setListening(false); return notify(new Error(microphoneMessage)); }
+    try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); recognition.start(); setListening(true); }
+    catch (error) { setListening(false); }
+  };
+  recognition.addEventListener('result', event => {
+    const transcript = event.results[0][0].transcript;
+    talkInput.value = transcript;
+    setListening(false);
+    askFaro(transcript);
+  });
   recognition.addEventListener('end', () => setListening(false));
   recognition.addEventListener('error', event => {
     setListening(false);
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') return notify(new Error(microphoneMessage));
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') { conversationMode = false; return notify(new Error(microphoneMessage)); }
     if (event.error !== 'aborted' && event.error !== 'no-speech') notify(new Error('No se pudo escuchar. Prueba a escribir la pregunta.'));
   });
-  talkMic.addEventListener('click', async () => {
-    if (listening) { recognition.stop(); return; }
-    const granted = await requestMicrophone();
-    if (!granted) return notify(new Error(microphoneMessage));
-    try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); recognition.start(); setListening(true); }
-    catch (error) { setListening(false); }
+  talkMic.addEventListener('click', () => {
+    if (conversationMode) { conversationMode = false; setListening(false); try { recognition.stop(); } catch (error) {} return; }
+    conversationMode = true;
+    startListening();
   });
 } else {
   talkMic.hidden = true;

@@ -606,6 +606,10 @@ class InMemoryRepository:
             wamid TEXT PRIMARY KEY, status TEXT NOT NULL, recipient TEXT,
             errors TEXT, updated_at TEXT NOT NULL
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_alert_rules (
+            id TEXT PRIMARY KEY, keywords TEXT NOT NULL, description TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+        )""")
         self.event_db.commit()
         for row in self.event_db.execute("SELECT * FROM memories ORDER BY created_at ASC").fetchall():
             memory = Memory(
@@ -737,6 +741,28 @@ class InMemoryRepository:
                 (wamid, status, recipient, errors, now().isoformat()),
             )
             self.event_db.commit()
+
+    def add_family_alert_rule(self, keywords: list[str], description: str) -> dict:
+        rule = {
+            "id": str(uuid4()),
+            "keywords": ",".join(keyword.strip() for keyword in keywords if keyword.strip())[:500],
+            "description": description.strip()[:300],
+            "created_at": now().isoformat(),
+        }
+        with self.lock:
+            self.event_db.execute(
+                "INSERT INTO family_alert_rules VALUES (?, ?, ?, 1, ?)",
+                (rule["id"], rule["keywords"], rule["description"], rule["created_at"]),
+            )
+            self.event_db.commit()
+        return rule
+
+    def list_family_alert_rules(self) -> list[dict]:
+        rows = self.event_db.execute(
+            "SELECT id, keywords, description, enabled, created_at FROM family_alert_rules "
+            "WHERE enabled=1 ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def save_onboarding(self, configuration: OnboardingConfiguration) -> None:
         with self.lock:
@@ -939,30 +965,48 @@ def detect_family_alert_category(text: str) -> Optional[str]:
     return None
 
 
+def detect_custom_alert_rule(text: str) -> Optional[dict]:
+    """Match a patient utterance against the family-configured alert rules."""
+    normalized = normalize_memory_text(text)
+    for rule in repository.list_family_alert_rules():
+        for keyword in rule["keywords"].split(","):
+            keyword = normalize_memory_text(keyword.strip())
+            if keyword and re.search(rf"\b{re.escape(keyword)}\w*", normalized):
+                return rule
+    return None
+
+
 def maybe_send_family_alert(event: Event) -> Optional[dict]:
     """Send a WhatsApp alert to the care network when a patient utterance matches the criteria."""
     if event.kind != "conversation" or str(event.metadata.get("speaker", "")) == "faro":
         return None
     category = detect_family_alert_category(event.summary)
-    if category is None:
+    rule = None if category else detect_custom_alert_rule(event.summary)
+    if category is None and rule is None:
         return None
-    previous = repository.last_auto_alert.get(category)
+    trigger_key = category or f"rule:{rule['id']}"
+    if category:
+        alert_message = f"Faro detectou {FAMILY_ALERT_LABELS[category]}: «{event.summary}»"
+        alert_kind = FAMILY_ALERT_KIND.get(category, "hazard")
+    else:
+        alert_message = f"Faro: {rule['description']}. Conversación: «{event.summary}»"
+        alert_kind = "hazard"
+    previous = repository.last_auto_alert.get(trigger_key)
     if previous and previous > now() - FAMILY_ALERT_DEDUP:
-        return {"alert_category": category, "family_alert_status": "suppressed_recent"}
+        return {"alert_category": category or rule["id"], "family_alert_status": "suppressed_recent"}
     contacts = enabled_alert_contacts()
     if not contacts:
-        return {"alert_category": category, "family_alert_status": "no_contact"}
-    repository.last_auto_alert[category] = now()
+        return {"alert_category": category or rule["id"], "family_alert_status": "no_contact"}
+    repository.last_auto_alert[trigger_key] = now()
     deliveries, failures = send_alert_to_contacts(contacts, EmergencyAlertCreate(
-        kind=FAMILY_ALERT_KIND.get(category, "hazard"),
-        spoken_message=f"Faro detectou {FAMILY_ALERT_LABELS[category]}: «{event.summary}»",
-        explicit_help_request=False,
+        kind=alert_kind, spoken_message=alert_message, explicit_help_request=False,
     ))
     status = "sent" if any(delivery.message_id for _, delivery in deliveries) else (
         "test_mode" if deliveries else "failed"
     )
     return {
-        "alert_category": category,
+        "alert_category": category or rule["id"],
+        "alert_rule_description": rule["description"] if rule else None,
         "family_alert_status": status,
         "recipients_attempted": len(contacts),
         "recipients_delivered": len(deliveries),
@@ -2013,6 +2057,45 @@ def build_family_summary(events: list[Event], language: str, question: str = "",
     return " ".join(parts)
 
 
+FAMILY_ALERT_TOOL = {
+    "type": "function",
+    "name": "registrar_aviso",
+    "description": (
+        "Registra un aviso automático por WhatsApp a la red de cuidados cuando el paciente "
+        "manifieste algo concreto (por ejemplo dolor, empeoramiento, caída). Úsala SOLO cuando "
+        "el familiar pida explícitamente que se le avise ante algo, o confirme con un 'sí' una "
+        "propuesta tuya de avisar."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "descripcion": {"type": "string", "description": "Qué se debe avisar, en una frase breve."},
+            "palabras_clave": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Palabras que, si aparecen en una frase del paciente, disparan el aviso (p. ej. 'empeora', 'dolor').",
+            },
+        },
+        "required": ["descripcion", "palabras_clave"],
+    },
+}
+
+
+def execute_family_tool(name: str, arguments: str) -> dict:
+    if name != "registrar_aviso":
+        return {"status": "error", "detail": "unknown tool"}
+    try:
+        args = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return {"status": "error", "detail": "invalid arguments"}
+    keywords = args.get("palabras_clave") or []
+    description = args.get("descripcion") or ""
+    if not isinstance(keywords, list) or not description:
+        return {"status": "error", "detail": "missing description or keywords"}
+    rule = repository.add_family_alert_rule([str(keyword) for keyword in keywords], str(description))
+    return {"status": "ok", "rule_id": rule["id"], "description": rule["description"], "keywords": rule["keywords"]}
+
+
 def openai_family_answer(
     question: str, events: list[Event], language: str, day_label: str = "hoy",
     history: Optional[list[dict[str, str]]] = None,
@@ -2049,33 +2132,55 @@ def openai_family_answer(
         "desorientación. Si el familiar pregunta cómo se le avisará, explícalo así (por WhatsApp "
         "a los contactos de la red de cuidados) y no prometas avisos que Faro no pueda cumplir. "
         "Básate en los eventos proporcionados; si la información no aparece, dilo con naturalidad. "
-        "No des consejos médicos ni alarmes sin motivo y no inventes datos."
+        "No des consejos médicos ni alarmes sin motivo y no inventes datos. Si el familiar pide "
+        "que se le avise ante algo concreto (o confirma con un 'sí' una propuesta tuya de avisar), "
+        "llama a la herramienta registrar_aviso con una descripción breve y las palabras clave, y "
+        "confírmale que el aviso queda activo por WhatsApp."
     )
     user_text = f"Pregunta del familiar: {question}\n\nEventos de {day_label}:\n{context}"
     if transcript:
         user_text = f"Conversación previa:\n{transcript}\n\n{user_text}"
-    payload = json.dumps({
-        "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
-        "instructions": instructions,
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": user_text}]}],
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=payload,
-        method="POST",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        body = json.loads(response.read())
-    for item in body.get("output", []):
-        if not isinstance(item, dict):
-            continue
-        for content in item.get("content", []):
-            if isinstance(content, dict) and content.get("type") == "output_text":
-                text = content.get("text")
-                if isinstance(text, str) and text.strip():
-                    return text.strip()
-    return None
+    input_items: list[dict] = [{"role": "user", "content": [{"type": "input_text", "text": user_text}]}]
+    text_answer: Optional[str] = None
+    for _ in range(3):
+        payload = json.dumps({
+            "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
+            "instructions": instructions,
+            "input": input_items,
+            "tools": [FAMILY_ALERT_TOOL],
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            "https://api.openai.com/v1/responses",
+            data=payload,
+            method="POST",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read())
+        function_calls = []
+        for item in body.get("output", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "function_call":
+                function_calls.append(item)
+            for content in item.get("content", []) or []:
+                if isinstance(content, dict) and content.get("type") == "output_text":
+                    text = content.get("text")
+                    if isinstance(text, str) and text.strip():
+                        text_answer = text.strip()
+        if not function_calls:
+            return text_answer
+        for call in function_calls:
+            result = execute_family_tool(str(call.get("name", "")), str(call.get("arguments", "{}")))
+            input_items.append({
+                "type": "function_call", "name": call.get("name"),
+                "arguments": call.get("arguments"), "call_id": call.get("call_id"),
+            })
+            input_items.append({
+                "type": "function_call_output", "call_id": call.get("call_id"),
+                "output": json.dumps(result, ensure_ascii=False),
+            })
+    return text_answer
 
 
 @app.post("/v1/family/ask", response_model=FamilyAnswer)
