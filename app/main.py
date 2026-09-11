@@ -258,6 +258,7 @@ class ConversationMemoryMatch(BaseModel):
 class FamilyQuestion(BaseModel):
     question: str = Field(min_length=2, max_length=500)
     language: Optional[str] = Field(default=None, pattern="^(es|gl|en)$")
+    conversation_id: Optional[str] = Field(default=None, min_length=6, max_length=64)
 
 
 class FamilyAnswerSource(BaseModel):
@@ -274,6 +275,7 @@ class FamilyAnswer(BaseModel):
     generated_by: str = Field(pattern="^(openai|summary)$")
     window_start: datetime
     window_end: datetime
+    conversation_id: str
     sources: list[FamilyAnswerSource] = Field(default_factory=list)
 
 
@@ -556,6 +558,7 @@ class InMemoryRepository:
         self.location_sessions: dict[UUID, LocationSession] = {}
         self.protective_observations: dict[str, deque[ProtectiveObservationCreate]] = defaultdict(deque)
         self.last_protective_action: dict[str, datetime] = {}
+        self.last_auto_alert: dict[str, datetime] = {}
         event_db_path = os.getenv("AURA_EVENT_DB")
         self.event_db = sqlite3.connect(event_db_path or ":memory:", check_same_thread=False)
         self.event_db.row_factory = sqlite3.Row
@@ -580,6 +583,11 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, person_id TEXT, kind TEXT NOT NULL,
             summary TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
+            id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+            content TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
+        self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_family_messages ON family_messages(conversation_id, created_at)")
         self.event_db.commit()
         for row in self.event_db.execute("SELECT * FROM memories ORDER BY created_at ASC").fetchall():
             memory = Memory(
@@ -673,6 +681,36 @@ class InMemoryRepository:
             occurred_at=event.occurred_at,
             relevance=score,
         ) for score, event in ranked[:limit]]
+
+    def add_family_message(self, conversation_id: str, role: str, content: str) -> None:
+        with self.lock:
+            self.event_db.execute(
+                "INSERT INTO family_messages VALUES (?, ?, ?, ?, ?)",
+                (str(uuid4()), conversation_id, role, content[:2000], now().isoformat()),
+            )
+            self.event_db.commit()
+
+    def family_messages(self, conversation_id: str, limit: int = 12) -> list[dict[str, str]]:
+        rows = self.event_db.execute(
+            "SELECT role, content FROM family_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT ?",
+            (conversation_id, limit),
+        ).fetchall()
+        return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+    def update_event_metadata(self, event_id: UUID, extra: dict) -> None:
+        with self.lock:
+            row = self.event_db.execute(
+                "SELECT metadata_json FROM events WHERE id=?", (str(event_id),)
+            ).fetchone()
+            if row is None:
+                return
+            metadata = json.loads(row["metadata_json"])
+            metadata.update(extra)
+            self.event_db.execute(
+                "UPDATE events SET metadata_json=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), str(event_id)),
+            )
+            self.event_db.commit()
 
     def save_onboarding(self, configuration: OnboardingConfiguration) -> None:
         with self.lock:
@@ -844,8 +882,62 @@ def send_alert_to_contacts(
         try:
             deliveries.append((contact, alert_provider.send(contact, alert, image=image)))
         except RuntimeError as error:
-            failures.append(f"{contact.id}:{error}")
+            failures.append(f"{contact.display_name}:{error}")
     return deliveries, failures
+
+
+FAMILY_ALERT_PATTERNS: dict[str, str] = {
+    "pain": r"\b(dolor\w*|duele\w*|doler\w*|molest\w*|malestar\w*|dor|doe|doen|doer\w*)\b",
+    "fall": r"\b(caid\w*|caer\w*|caeu|caiu|cain|cai|golpe\w*|mareo\w*|mare\w*|desma\w*|tropiez\w*|trope\w*|tropez\w*|atragant\w*)\b",
+    "breathing": r"\b(respir\w*|asfix\w*|ahog\w*|ahogo|fatiga\w*)\b",
+}
+FAMILY_ALERT_LABELS: dict[str, str] = {
+    "pain": "posible dolor",
+    "fall": "posible caída o golpe",
+    "breathing": "dificultad para respirar",
+}
+FAMILY_ALERT_KIND: dict[str, str] = {"pain": "episode", "fall": "hazard", "breathing": "hazard"}
+FAMILY_ALERT_DEDUP = timedelta(minutes=15)
+
+
+def detect_family_alert_category(text: str) -> Optional[str]:
+    """Classify a patient utterance against the family alert criteria."""
+    normalized = normalize_memory_text(text)
+    for category, pattern in FAMILY_ALERT_PATTERNS.items():
+        if re.search(pattern, normalized):
+            return category
+    return None
+
+
+def maybe_send_family_alert(event: Event) -> Optional[dict]:
+    """Send a WhatsApp alert to the care network when a patient utterance matches the criteria."""
+    if event.kind != "conversation" or str(event.metadata.get("speaker", "")) == "faro":
+        return None
+    category = detect_family_alert_category(event.summary)
+    if category is None:
+        return None
+    previous = repository.last_auto_alert.get(category)
+    if previous and previous > now() - FAMILY_ALERT_DEDUP:
+        return {"alert_category": category, "family_alert_status": "suppressed_recent"}
+    contacts = enabled_alert_contacts()
+    if not contacts:
+        return {"alert_category": category, "family_alert_status": "no_contact"}
+    repository.last_auto_alert[category] = now()
+    deliveries, failures = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+        kind=FAMILY_ALERT_KIND.get(category, "hazard"),
+        spoken_message=f"Faro detectou {FAMILY_ALERT_LABELS[category]}: «{event.summary}»",
+        explicit_help_request=False,
+    ))
+    status = "sent" if any(delivery.message_id for _, delivery in deliveries) else (
+        "test_mode" if deliveries else "failed"
+    )
+    return {
+        "alert_category": category,
+        "family_alert_status": status,
+        "recipients_attempted": len(contacts),
+        "recipients_delivered": len(deliveries),
+        "recipient_failures": " | ".join(failures[:3]),
+    }
 
 
 def person_or_404(person_id: UUID) -> Person:
@@ -1240,6 +1332,24 @@ def list_emergency_alerts(authorization: Optional[str] = Header(default=None)) -
     return sorted(repository.emergency_alerts.values(), key=lambda item: item.created_at, reverse=True)
 
 
+@app.post("/v1/alerts/test")
+def test_family_alert(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Send a test WhatsApp alert to the care network and report the provider result."""
+    require_auth(authorization)
+    contacts = enabled_alert_contacts()
+    if not contacts:
+        raise HTTPException(status_code=409, detail="No hay contactos de cuidado con WhatsApp activado")
+    deliveries, failures = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+        kind="hazard", spoken_message="Prueba de aviso de Faro da Memoria.", explicit_help_request=False,
+    ))
+    return {
+        "provider": type(alert_provider).__name__,
+        "contacts": len(contacts),
+        "delivered": [{"name": contact.display_name, "message_id": delivery.message_id} for contact, delivery in deliveries],
+        "failures": failures,
+    }
+
+
 def refresh_location_session(session: LocationSession) -> LocationSession:
     if session.status == "active" and session.expires_at <= now():
         session = session.model_copy(update={"status": "expired"})
@@ -1482,7 +1592,12 @@ h1{{font:500 34px Georgia;margin:5px 0}}.mark{{color:#2d7258;font-weight:700}}#m
 @app.post("/v1/events", response_model=Event, status_code=201)
 def create_event(request: EventCreate, authorization: Optional[str] = Header(default=None)) -> Event:
     require_auth(authorization)
-    return repository.add_event(request)
+    event = repository.add_event(request)
+    alert_metadata = maybe_send_family_alert(event)
+    if alert_metadata:
+        repository.update_event_metadata(event.id, alert_metadata)
+        event = event.model_copy(update={"metadata": {**event.metadata, **alert_metadata}})
+    return event
 
 
 @app.get("/v1/events", response_model=list[Event])
@@ -1823,7 +1938,10 @@ def build_family_summary(events: list[Event], language: str, question: str = "",
     return " ".join(parts)
 
 
-def openai_family_answer(question: str, events: list[Event], language: str, day_label: str = "hoy") -> Optional[str]:
+def openai_family_answer(
+    question: str, events: list[Event], language: str, day_label: str = "hoy",
+    history: Optional[list[dict[str, str]]] = None,
+) -> Optional[str]:
     api_key = os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
@@ -1836,25 +1954,35 @@ def openai_family_answer(question: str, events: list[Event], language: str, day_
         moment = event.occurred_at.astimezone(family_zone()).strftime("%H:%M")
         lines.append(f"- {moment} · {event.kind}{speaker_label}: {event.summary}")
     context = "\n".join(lines) if lines else "(sin eventos registrados en ese día)"
-    today = now().astimezone(family_zone()).strftime("%d/%m/%Y")
-    instructions = (
-        "Eres Faro, el asistente de Faro da Memoria, y respondes a un familiar o cuidador "
-        f"que pregunta por el día de {patient_name}. Hoy es {today}. Los eventos que recibes "
-        f"corresponden al día consultado ({day_label}). Responde en "
-        f"{FAMILY_LANGUAGE_NAMES.get(language, 'español')}, con tono cercano, claro y breve "
-        "(máximo 6 frases). Responde de forma CONCRETA a lo que se te pregunta: si preguntan "
-        "por avisos, di cuáles y cuándo; si preguntan por personas, di quién; si preguntan por "
-        "una conversación, resume lo dicho. Básate SOLO en los eventos proporcionados; si la "
-        "información no aparece, dilo con naturalidad. No des consejos médicos ni alarmes sin "
-        "motivo y no inventes datos."
+    transcript = "\n".join(
+        f"{'Familiar' if turn.get('role') == 'user' else 'Faro'}: {turn.get('content', '')}"
+        for turn in (history or [])
     )
+    today = now().astimezone(family_zone()).strftime("%d/%m/%Y")
+    contacts = [contact.display_name for contact in enabled_alert_contacts()]
+    contacts_label = ", ".join(contacts) if contacts else "sin contactos configurados todavía"
+    instructions = (
+        "Eres Faro, el asistente de Faro da Memoria, y conversas con un familiar o cuidador "
+        f"sobre {patient_name}. Hoy es {today}. Los eventos que recibes corresponden al día "
+        f"consultado ({day_label}). Responde en {FAMILY_LANGUAGE_NAMES.get(language, 'español')}, "
+        "con tono cercano, claro y breve (máximo 6 frases). Responde de forma CONCRETA y TEN EN "
+        "CUENTA los mensajes anteriores de esta conversación: si el familiar ya pidió algo, "
+        "recuérdalo y sé coherente (no repitas el resumen del día si la pregunta es otra). "
+        "Sobre los avisos: Faro avisa automáticamente por WhatsApp a la red de cuidados "
+        f"({contacts_label}) cuando detecta dolor, posibles caídas o golpes, dificultad para "
+        "respirar, peligros (humo, agua, cristales, cocina encendida), peticiones de ayuda o "
+        "desorientación. Si el familiar pregunta cómo se le avisará, explícalo así (por WhatsApp "
+        "a los contactos de la red de cuidados) y no prometas avisos que Faro no pueda cumplir. "
+        "Básate en los eventos proporcionados; si la información no aparece, dilo con naturalidad. "
+        "No des consejos médicos ni alarmes sin motivo y no inventes datos."
+    )
+    user_text = f"Pregunta del familiar: {question}\n\nEventos de {day_label}:\n{context}"
+    if transcript:
+        user_text = f"Conversación previa:\n{transcript}\n\n{user_text}"
     payload = json.dumps({
         "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
         "instructions": instructions,
-        "input": [{
-            "role": "user",
-            "content": [{"type": "input_text", "text": f"Pregunta del familiar: {question}\n\nEventos de {day_label}:\n{context}"}],
-        }],
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": user_text}]}],
     }).encode("utf-8")
     request = urllib.request.Request(
         "https://api.openai.com/v1/responses",
@@ -1883,6 +2011,9 @@ def ask_family_question(
     question = request.question.strip()
     if len(question) < 2:
         raise HTTPException(status_code=422, detail="Question is too short")
+    conversation_id = request.conversation_id or uuid4().hex
+    history = repository.family_messages(conversation_id, limit=10)
+    repository.add_family_message(conversation_id, "user", question)
     language = family_language(request.language)
     target = family_target_date(question)
     day_label = family_day_label(target, language)
@@ -1891,13 +2022,14 @@ def ask_family_question(
     generated_by = "summary"
     answer: Optional[str] = None
     try:
-        answer = openai_family_answer(question, events, language, day_label)
+        answer = openai_family_answer(question, events, language, day_label, history)
     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
         answer = None
     if answer:
         generated_by = "openai"
     else:
         answer = build_family_summary(events, language, question, day_label)
+    repository.add_family_message(conversation_id, "assistant", answer)
     sources = [
         FamilyAnswerSource(
             event_id=event.id,
@@ -1910,7 +2042,7 @@ def ask_family_question(
     ]
     return FamilyAnswer(
         answer=answer, language=language, generated_by=generated_by,
-        window_start=start, window_end=end, sources=sources,
+        window_start=start, window_end=end, conversation_id=conversation_id, sources=sources,
     )
 
 

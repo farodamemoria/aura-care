@@ -14,5 +14,6 @@
 .family-talk-form button{width:auto;flex:0 0 auto}
 .family-talk-answer{margin-top:16px;padding:16px 18px;border-radius:14px;background:var(--mint);color:var(--ink);line-height:1.5;white-space:pre-wrap}
 .family-talk-answer::before{content:"🔊 ";font-size:15px}
+.talk-reset{margin-top:12px;width:auto}
 .family-talk-card .status-line{margin-top:12px;color:var(--muted)}
 @media(max-width:640px){.family-talk-heading{flex-direction:column}.family-talk-form{flex-direction:column}.family-talk-form button,.talk-mic{width:100%}}

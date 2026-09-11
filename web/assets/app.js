@@ -298,6 +298,7 @@ const talkInput = document.querySelector('#talk-question');
 const talkAnswer = document.querySelector('#talk-answer');
 const talkStatus = document.querySelector('#talk-status');
 const talkMic = document.querySelector('#talk-mic');
+const talkReset = document.querySelector('#talk-reset');
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const speechLanguages = {es: 'es-ES', gl: 'gl-ES', en: 'en-US'};
 
@@ -317,9 +318,12 @@ async function askFaro(question) {
   const button = talkForm.querySelector('button');
   button.disabled = true;
   try {
-    const answer = await api('/v1/family/ask', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question: text})});
+    const conversationId = localStorage.getItem('familyConversationId') || null;
+    const answer = await api('/v1/family/ask', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question: text, conversation_id: conversationId})});
+    if (answer.conversation_id) localStorage.setItem('familyConversationId', answer.conversation_id);
     talkAnswer.textContent = answer.answer;
     talkAnswer.hidden = false;
+    if (talkReset) talkReset.hidden = false;
     talkStatus.hidden = true;
     speakAnswer(answer.answer, answer.language);
   } catch (error) { talkStatus.hidden = true; notify(error); }
@@ -362,6 +366,15 @@ if (SpeechRecognition) {
   });
 } else {
   talkMic.hidden = true;
+}
+
+if (talkReset) {
+  talkReset.addEventListener('click', () => {
+    localStorage.removeItem('familyConversationId');
+    talkAnswer.hidden = true; talkAnswer.textContent = '';
+    talkInput.value = '';
+    talkReset.hidden = true;
+  });
 }
 
 load();

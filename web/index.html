@@ -106,11 +106,12 @@
         </form>
         <p id="talk-status" class="status-line" hidden></p>
         <div id="talk-answer" class="family-talk-answer" aria-live="polite" hidden></div>
+        <button id="talk-reset" class="secondary talk-reset" type="button" hidden>Empezar de nuevo</button>
       </article>
       <div id="events" class="timeline" aria-live="polite"></div>
     </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir 5 fotos</span><input type="file" name="files" accept="image/jpeg,image/png" capture="user" multiple required></label><div class="file-hint">Frontal, con buena luz y sin otras personas.</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
-  <script src="/assets/app.js?v=17" defer></script>
+  <script src="/assets/app.js?v=18" defer></script>
 </body>
 </html>
