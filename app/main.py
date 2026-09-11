@@ -276,6 +276,7 @@ class FamilyAnswer(BaseModel):
     window_start: datetime
     window_end: datetime
     conversation_id: str
+    end_conversation: bool = False
     sources: list[FamilyAnswerSource] = Field(default_factory=list)
 
 
@@ -2143,16 +2144,22 @@ def openai_family_answer(
         f"de {patient_name}. Hoy es {today}. Responde SIEMPRE en "
         f"{FAMILY_LANGUAGE_NAMES.get(language, 'español')}, con tono cercano, claro y breve "
         "(máximo 5 frases).\n\n"
-        "Puedes conversar con naturalidad sobre cualquier tema relacionado con el cuidado de "
-        f"{patient_name}, pero SOLO tienes estas dos capacidades reales:\n"
+        "Tu ámbito es EXCLUSIVAMENTE el cuidado de "
+        f"{patient_name} a través de Faro: su día, sus eventos, los avisos y la red de cuidados. "
+        "Puedes ser cercano y natural, pero NO debes realizar tareas ajenas a ese ámbito (chistes, "
+        "conocimiento general, redacciones, traducciones, cálculos, etc.); si te lo piden, declina "
+        "con amabilidad y ofrece ayuda sobre el paciente.\n\n"
+        "Tus dos capacidades reales son:\n"
         "1) Consultar y explicar el registro de eventos del paciente (abajo tienes los eventos "
         f"del día consultado: {day_label}).\n"
         f"2) Registrar avisos automáticos por WhatsApp a la red de cuidados ({contacts_label}) "
         "ante palabras clave concretas, usando la herramienta registrar_aviso.\n\n"
         "Reglas que debes cumplir siempre:\n"
         "- No repitas el resumen del día salvo que te pregunten por el día o por los eventos. Si "
-        "el mensaje es un saludo, una despedida, un agradecimiento, una broma o charla, responde "
-        "con naturalidad y brevedad SIN enumerar eventos ni repetir resúmenes anteriores.\n"
+        "el mensaje es un saludo, una despedida, un agradecimiento o charla, responde con "
+        "naturalidad y brevedad SIN enumerar eventos ni repetir resúmenes anteriores.\n"
+        "- Si el familiar se despide, agradece o da por terminada la conversación, responde "
+        "brevemente y añade la etiqueta [FIN] al final (y solo en ese caso).\n"
         "- No inventes funciones: NO existen informes periódicos o diarios, resúmenes programados, "
         "recordatorios, horarios, tareas recurrentes ni envíos a demanda. Si te lo piden, dilo con "
         "naturalidad y ofrece solo lo que sí puedes hacer.\n"
@@ -2234,7 +2241,8 @@ def ask_family_question(
         repository.add_family_message(conversation_id, "assistant", answer)
         return FamilyAnswer(
             answer=answer, language=language, generated_by="summary",
-            window_start=start, window_end=end, conversation_id=conversation_id, sources=[],
+            window_start=start, window_end=end, conversation_id=conversation_id,
+            end_conversation=True, sources=[],
         )
     events = family_day_events(start, end)
     generated_by = "summary"
@@ -2243,7 +2251,13 @@ def ask_family_question(
         answer = openai_family_answer(question, events, language, day_label, history)
     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
         answer = None
+    end_conversation = False
     if answer:
+        if "[FIN]" in answer:
+            answer = answer.replace("[FIN]", "").strip()
+            end_conversation = True
+        if not answer:
+            answer = FAMILY_CLOSERS_REPLY.get(language, FAMILY_CLOSERS_REPLY["es"])
         generated_by = "openai"
     else:
         answer = build_family_summary(events, language, question, day_label)
@@ -2260,7 +2274,8 @@ def ask_family_question(
     ]
     return FamilyAnswer(
         answer=answer, language=language, generated_by=generated_by,
-        window_start=start, window_end=end, conversation_id=conversation_id, sources=sources,
+        window_start=start, window_end=end, conversation_id=conversation_id,
+        end_conversation=end_conversation, sources=sources,
     )
 
 

@@ -301,6 +301,7 @@ const talkMic = document.querySelector('#talk-mic');
 const talkReset = document.querySelector('#talk-reset');
 let conversationMode = false;
 let startListening = null;
+let stopListening = null;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const speechLanguages = {es: 'es-ES', gl: 'gl-ES', en: 'en-US'};
 
@@ -332,7 +333,8 @@ async function askFaro(question) {
     if (talkReset) talkReset.hidden = false;
     talkStatus.hidden = true;
     await speakAnswer(answer.answer, answer.language);
-    if (conversationMode && startListening) startListening();
+    if (answer.end_conversation) { conversationMode = false; if (stopListening) stopListening(); }
+    else if (conversationMode && startListening) startListening();
   } catch (error) { talkStatus.hidden = true; notify(error); }
   finally { button.disabled = false; }
 }
@@ -367,6 +369,7 @@ if (SpeechRecognition) {
     try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); recognition.start(); setListening(true); }
     catch (error) { setListening(false); }
   };
+  stopListening = () => { setListening(false); try { recognition.stop(); } catch (error) {} };
   recognition.addEventListener('result', event => {
     const transcript = event.results[0][0].transcript;
     talkInput.value = transcript;
