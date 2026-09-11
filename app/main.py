@@ -891,6 +891,19 @@ def caregiver_portal() -> FileResponse:
     return FileResponse(web_dir / "index.html")
 
 
+downloads_dir = web_dir.parent / "downloads"
+
+
+@app.get("/download/faro.apk", include_in_schema=False)
+def download_faro_app() -> FileResponse:
+    apk = downloads_dir / "faro.apk"
+    if not apk.is_file():
+        raise HTTPException(status_code=404, detail="La aplicación todavía no está disponible para descarga")
+    return FileResponse(
+        apk, media_type="application/vnd.android.package-archive", filename="Faro.apk"
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "aura-backend", "face_provider": type(face_provider).__name__, "alert_provider": type(alert_provider).__name__, "api_version": API_VERSION}

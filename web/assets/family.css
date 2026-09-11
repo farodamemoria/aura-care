@@ -1,3 +1,6 @@
+.download-app{position:absolute;right:max(22px,calc((100% - 1180px)/2));top:74px;display:inline-flex;align-items:center;gap:8px;background:#ffffff1f;border:1px solid #ffffff40;color:#fff;text-decoration:none;font-weight:800;border-radius:999px;padding:10px 16px;font-size:13px;backdrop-filter:blur(8px);z-index:2}
+.download-app:hover{background:#ffffff33}
+@media(max-width:760px){.download-app{position:static;margin-top:18px}}
 .family-talk-card{margin:0 0 22px}
 .family-talk-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
 .family-talk-heading h3{font:500 22px Georgia;margin:6px 0 4px;color:var(--ink)}

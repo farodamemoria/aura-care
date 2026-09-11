@@ -40,3 +40,9 @@ state.json
 *.pre-*
 *.old
 *.orig
+
+# Binarios de la app (se sirven desde el servidor, no en Git)
+*.apk
+*.aab
+*.ipa
+downloads/

@@ -364,4 +364,11 @@ if (SpeechRecognition) {
   talkMic.hidden = true;
 }
 
+const downloadApp = document.querySelector('#download-app');
+if (downloadApp) {
+  fetch(downloadApp.getAttribute('href'), {method: 'HEAD'})
+    .then(response => { if (response.ok) downloadApp.hidden = false; })
+    .catch(() => {});
+}
+
 load();
