@@ -364,22 +364,4 @@ if (SpeechRecognition) {
   talkMic.hidden = true;
 }
 
-const installApp = document.querySelector('#install-app');
-let deferredInstallPrompt = null;
-window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferredInstallPrompt = event; });
-window.addEventListener('appinstalled', () => { if (installApp) installApp.hidden = true; });
-if (installApp) {
-  const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-  if (!standalone) installApp.hidden = false;
-  installApp.addEventListener('click', async () => {
-    if (deferredInstallPrompt) {
-      deferredInstallPrompt.prompt();
-      await deferredInstallPrompt.userChoice;
-      deferredInstallPrompt = null;
-    } else {
-      notify(new Error('Para instalar Faro Familia: en Android abre el menú del navegador (⋮) y elige "Instalar aplicación" o "Añadir a pantalla de inicio". En iPhone: Compartir → "Añadir a pantalla de inicio".'));
-    }
-  });
-}
-
 load();
