@@ -383,11 +383,16 @@ class NoopAlertProvider:
 
 
 class MetaWhatsAppProvider:
-    def __init__(self, phone_number_id: str, token: str, template_name: str) -> None:
+    def __init__(
+        self, phone_number_id: str, token: str, template_name: str,
+        template_language: str = "es", prefer_template: bool = True,
+    ) -> None:
         self.url = f"https://graph.facebook.com/v23.0/{phone_number_id}/messages"
         self.media_url = f"https://graph.facebook.com/v23.0/{phone_number_id}/media"
         self.token = token
         self.template_name = template_name
+        self.template_language = template_language
+        self.prefer_template = prefer_template
 
     def _post_json(self, payload: bytes) -> dict:
         request = urllib.request.Request(self.url, data=payload, method="POST", headers={
@@ -434,15 +439,16 @@ class MetaWhatsAppProvider:
             "type": "template",
             "template": {
                 "name": self.template_name,
-                "language": {"code": "es"},
+                "language": {"code": self.template_language},
                 "components": [{"type": "body", "parameters": [
                     {"type": "text", "text": alert.kind},
                     {"type": "text", "text": alert.spoken_message + location},
                 ]}],
             },
         }).encode("utf-8")
+        payloads = (template_payload, text_payload) if self.prefer_template else (text_payload, template_payload)
         result, last_error = None, None
-        for payload in (text_payload, template_payload):
+        for payload in payloads:
             try:
                 result = self._post_json(payload)
                 break
@@ -844,8 +850,12 @@ def build_alert_provider() -> AlertProvider:
     token = os.getenv("AURA_WHATSAPP_TOKEN")
     if not phone_number_id or not token:
         return NoopAlertProvider()
+    prefer_template = os.getenv("AURA_WHATSAPP_PREFER_TEMPLATE", "1").lower() not in {"0", "false", "no"}
     return MetaWhatsAppProvider(
-        phone_number_id, token, os.getenv("AURA_WHATSAPP_TEMPLATE", "faro_emergency_alert")
+        phone_number_id, token,
+        os.getenv("AURA_WHATSAPP_TEMPLATE", "faro_emergency_alert"),
+        os.getenv("AURA_WHATSAPP_TEMPLATE_LANG", "es"),
+        prefer_template,
     )
 
 
