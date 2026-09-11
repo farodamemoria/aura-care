@@ -371,6 +371,8 @@ class AlertDelivery:
     message_id: Optional[str]
     photo_message_id: Optional[str] = None
     photo_status: str = "not_requested"
+    channel: str = "text"
+    template_error: Optional[str] = None
 
 
 class AlertProvider(Protocol):
@@ -446,19 +448,25 @@ class MetaWhatsAppProvider:
                 ]}],
             },
         }).encode("utf-8")
-        payloads = (template_payload, text_payload) if self.prefer_template else (text_payload, template_payload)
-        result, last_error = None, None
-        for payload in payloads:
+        attempts = (
+            (("template", template_payload), ("text", text_payload)) if self.prefer_template
+            else (("text", text_payload), ("template", template_payload))
+        )
+        result, last_error, channel, template_error = None, None, "text", None
+        for name, payload in attempts:
             try:
                 result = self._post_json(payload)
+                channel = name
                 break
             except urllib.error.HTTPError as error:
                 last_error = error.read().decode("utf-8", errors="replace")[:500]
+                if name == "template":
+                    template_error = last_error
         if result is None:
             raise RuntimeError(f"WhatsApp provider rejected text and template delivery: {last_error}")
         message_id = result.get("messages", [{}])[0].get("id")
         if not image:
-            return AlertDelivery(message_id=message_id)
+            return AlertDelivery(message_id=message_id, channel=channel, template_error=template_error)
         try:
             media_id = self._upload_jpeg(image)
             photo_result = self._post_json(json.dumps({
@@ -468,9 +476,9 @@ class MetaWhatsAppProvider:
                 "image": {"id": media_id, "caption": "Imagen reciente capturada por las gafas para esta alerta de Faro."},
             }).encode("utf-8"))
             photo_message_id = photo_result.get("messages", [{}])[0].get("id")
-            return AlertDelivery(message_id=message_id, photo_message_id=photo_message_id, photo_status="sent")
+            return AlertDelivery(message_id=message_id, photo_message_id=photo_message_id, photo_status="sent", channel=channel, template_error=template_error)
         except (RuntimeError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
-            return AlertDelivery(message_id=message_id, photo_status="failed")
+            return AlertDelivery(message_id=message_id, photo_status="failed", channel=channel, template_error=template_error)
 
 
 class NoopFaceProvider:
@@ -1367,7 +1375,11 @@ def test_family_alert(authorization: Optional[str] = Header(default=None)) -> di
     return {
         "provider": type(alert_provider).__name__,
         "contacts": len(contacts),
-        "delivered": [{"name": contact.display_name, "message_id": delivery.message_id} for contact, delivery in deliveries],
+        "delivered": [
+            {"name": contact.display_name, "message_id": delivery.message_id,
+             "channel": delivery.channel, "template_error": delivery.template_error}
+            for contact, delivery in deliveries
+        ],
         "failures": failures,
     }
 
