@@ -2,7 +2,7 @@
 
 > Documento de contexto para asistentes de IA (opencode / DeepSeek) y desarrolladores.
 > **Si eres una IA que acaba de iniciar sesión: lee este archivo COMPLETO antes de actuar.**
-> **Última actualización:** 2026-09-11 · **Punto estable (`main`):** commit `732363e`.
+> **Última actualización:** 2026-09-11 · **Punto estable:** rama `main` (último commit de código: `732363e`).
 > Este documento NO contiene secretos: solo indica DÓNDE están.
 
 ---
