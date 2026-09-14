@@ -1084,6 +1084,33 @@ def download_faro_app() -> FileResponse:
     )
 
 
+WEB_DOWNLOADS_DIR = web_dir / "downloads"
+
+
+def _download_apk(filename: str, download_name: str) -> FileResponse:
+    apk = WEB_DOWNLOADS_DIR / filename
+    if not apk.is_file():
+        raise HTTPException(status_code=404, detail="La aplicación todavía no está disponible para descarga")
+    return FileResponse(
+        apk, media_type="application/vnd.android.package-archive", filename=download_name
+    )
+
+
+@app.get("/download/camera-access.apk", include_in_schema=False)
+def download_camera_access_app() -> FileResponse:
+    return _download_apk("camera-access.apk", "Faro-Camara.apk")
+
+
+@app.get("/download/faro-movil.apk", include_in_schema=False)
+def download_faro_movil_app() -> FileResponse:
+    return _download_apk("faro-movil.apk", "Faro-Movil.apk")
+
+
+@app.get("/download/faro-familia.apk", include_in_schema=False)
+def download_faro_familia_app() -> FileResponse:
+    return _download_apk("faro-familia.apk", "Faro-Familia.apk")
+
+
 TWA_ASSET_LINKS = [{
     "relation": ["delegate_permission/common.handle_all_urls"],
     "target": {
