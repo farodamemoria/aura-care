@@ -1,5 +1,7 @@
-const token = localStorage.getItem('auraToken') || 'local-development-only';
-const authHeaders = {Authorization: `Bearer ${token}`};
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) localStorage.setItem('auraToken', urlToken.trim());
+const token = localStorage.getItem('auraToken') || '';
+const authHeaders = token ? {Authorization: `Bearer ${token}`} : {};
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/assets/sw.js');
 
 async function api(path, options = {}) {

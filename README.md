@@ -11,8 +11,9 @@ python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8082
 ```
 
-Abrir `http://127.0.0.1:8082`. La API local usa `Bearer local-development-only`; producción usa
-JWT de Cognito validados por API Gateway.
+Abrir `http://127.0.0.1:8082`. La API exige `Bearer $AURA_LOCAL_TOKEN` (token configurado en el
+servidor; sin valor por defecto: si falta, el fallo es cerrado). Producción usa JWT de Cognito
+validados por API Gateway.
 
 ## Arquitectura SaaS objetivo
 

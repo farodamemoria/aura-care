@@ -114,7 +114,7 @@ Componentes del producto:
 
 - **FastAPI** "AURA Care" v0.2.0 (`app/main.py`), servido con uvicorn en `0.0.0.0:8082`.
 - **Persistencia:** SQLite (`faro-events.db`) + ficheros (fotos de caras en `person-photos/`).
-- **Auth:** cabecera `Authorization: Bearer <AURA_LOCAL_TOKEN>` (por defecto `local-development-only`). Objetivo producción: JWT de Cognito validado por API Gateway.
+- **Auth:** cabecera `Authorization: Bearer <AURA_LOCAL_TOKEN>` (token configurado en el servidor; sin valor por defecto: si falta, el fallo es cerrado). Objetivo producción: JWT de Cognito validado por API Gateway.
 - **Zona horaria** del "día" del paciente: `Europe/Madrid` (`AURA_FAMILY_TIMEZONE`).
 - **Idiomas** del chat: es/gl/en (`AURA_FAMILY_LANGUAGE`, por defecto `es`).
 
@@ -162,6 +162,41 @@ aura-care/
 
 ## 7. Cómo trabajar (flujo)
 
+### Flujo Git/GitHub (colaboración — 3 personas)
+
+> Regla permanente: **nunca** se sube directo a `main`. Todo pasa por ramas + Pull Request. Una tarea de Jira = una rama.
+
+**Antes de empezar una tarea** (actualizar tu copia y aislar el trabajo):
+```bash
+git checkout main
+git pull origin main
+git checkout -b KAN-XX-descripcion
+```
+
+**Desarrollar y subir** (commits pequeños y frecuentes):
+```bash
+git add .
+git commit -m "KAN-XX: resumen del cambio"
+git push -u origin KAN-XX-descripcion
+```
+
+**Abrir Pull Request** en GitHub (rama → `main`). Otro miembro revisa y hace merge; al mergear se borra la rama.
+
+**Mantenerse al día** (a diario o antes de empezar):
+```bash
+git checkout main
+git pull origin main
+```
+
+Reglas para no pisarse:
+1. **Nunca pushear directo a `main`**; solo vía rama + PR. `main` queda siempre estable y desplegable.
+2. **Una rama = una tarea de Jira** (nada de mezclar tareas).
+3. **Trabajar en archivos distintos siempre que se pueda.** Si dos personas tocan el mismo archivo, el segundo merge tendrá conflicto: se resuelve en local (`git pull origin main` en tu rama → resolver → commit → push), **nunca a ciegas**.
+4. **No subir secretos ni builds:** `.env`, `*.keystore`, `__pycache__/`, `.gradle/`, `app/build/`, `*.db` (ya están en los `.gitignore`; respetarlos).
+5. Cada persona sube a su rama; los demás reciben el trabajo con `git pull origin main` tras el merge del PR.
+
+### Despliegue y registro
+
 1. **Editar en local** (repo clonado). El punto estable es la rama `main`.
 2. **Desplegar en la EC2:**
    ```bash
@@ -177,14 +212,14 @@ aura-care/
 ### Comandos útiles
 ```bash
 # Prueba de aviso WhatsApp (envía mensaje real):
-curl -s -X POST https://d2n7ih9kfxbzvd.cloudfront.net/v1/alerts/test -H "Authorization: Bearer local-development-only"
+curl -s -X POST https://d2n7ih9kfxbzvd.cloudfront.net/v1/alerts/test -H "Authorization: Bearer $AURA_LOCAL_TOKEN"
 
 # Estados de entrega (requiere app en Live + webhook):
-curl -s "https://d2n7ih9kfxbzvd.cloudfront.net/v1/whatsapp/statuses" -H "Authorization: Bearer local-development-only"
+curl -s "https://d2n7ih9kfxbzvd.cloudfront.net/v1/whatsapp/statuses" -H "Authorization: Bearer $AURA_LOCAL_TOKEN"
 
 # Pregunta al chat familiar:
 curl -s -X POST https://d2n7ih9kfxbzvd.cloudfront.net/v1/family/ask \
-  -H "Authorization: Bearer local-development-only" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $AURA_LOCAL_TOKEN" -H "Content-Type: application/json" \
   -d '{"question":"¿Cómo ha ido hoy?","language":"es"}'
 ```
 

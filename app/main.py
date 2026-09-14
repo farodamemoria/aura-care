@@ -26,12 +26,17 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .environmental_listening import (
+    ACOUSTIC_SIGNAL_LABELS,
+    EnvironmentalListeningEngine,
+    ListeningConfig,
+)
+
 CONFIDENCE_MINIMUM = 95.0
 CONFIDENCE_MEAN_MINIMUM = 97.0
 CONSENSUS_MINIMUM = 2
 SAME_PERSON_COOLDOWN = timedelta(minutes=10)
 REVIEW_IMAGE_TTL = timedelta(hours=24)
-LOCAL_TOKEN = "local-development-only"
 PATIENT_FACE_ID = UUID("00000000-0000-4000-8000-000000000001")
 MEMORY_STOP_WORDS = {
     "que", "como", "cuando", "donde", "quien", "para", "por", "con", "del", "las", "los",
@@ -905,14 +910,24 @@ API_VERSION = "2026-08-26-patient-self-recognition-v1"
 
 
 def require_auth(authorization: Optional[str]) -> str:
-    if authorization != f"Bearer {os.getenv('AURA_LOCAL_TOKEN', LOCAL_TOKEN)}":
+    configured_token = os.getenv("AURA_LOCAL_TOKEN")
+    scheme, separator, credential = (authorization or "").partition(" ")
+    if (
+        not configured_token
+        or separator != " "
+        or scheme.casefold() != "bearer"
+        or not credential
+        or not hmac.compare_digest(credential, configured_token)
+    ):
         raise HTTPException(status_code=401, detail="Authentication required")
     return "local-care-circle"
 
 
 def credential_hash(secret: str) -> str:
     """Hash bearer material with a server-side pepper; plaintext is never persisted."""
-    pepper = os.getenv("AURA_CREDENTIAL_PEPPER") or os.getenv("AURA_LOCAL_TOKEN", LOCAL_TOKEN)
+    pepper = os.getenv("AURA_CREDENTIAL_PEPPER")
+    if not pepper:
+        raise HTTPException(status_code=503, detail="Credential hashing not configured")
     return hmac.new(pepper.encode("utf-8"), secret.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
@@ -2535,3 +2550,114 @@ def create_memory(request: MemoryCreate, authorization: Optional[str] = Header(d
 def list_memories(authorization: Optional[str] = Header(default=None)) -> list[Memory]:
     require_auth(authorization)
     return list(repository.memories.values())
+
+
+class AcousticDetectionCreate(BaseModel):
+    signal: str = Field(min_length=1, max_length=40)
+    confidence: float = Field(ge=0, le=1)
+    occurred_at: Optional[datetime] = None
+
+
+class AcousticResponseCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    occurred_at: Optional[datetime] = None
+
+
+acoustic_listening = EnvironmentalListeningEngine(ListeningConfig())
+ACOUSTIC_ALERT_DEDUP = timedelta(minutes=10)
+
+
+def dispatch_acoustic_escalation(escalation: dict) -> dict:
+    """Send a cautious possible-symptom alert to the active care network."""
+    contacts = enabled_alert_contacts()
+    result = {
+        "status": "no_contact", "recipients_attempted": 0, "recipients_delivered": 0,
+        "recipient_failures": "",
+    }
+    if not contacts:
+        return result
+    result["recipients_attempted"] = len(contacts)
+    deduplication_key = f"acoustic:{escalation['signal']}:{escalation['reason']}"
+    previous = repository.last_auto_alert.get(deduplication_key)
+    if previous and previous > now() - ACOUSTIC_ALERT_DEDUP:
+        result["status"] = "suppressed_recent"
+        return result
+    repository.last_auto_alert[deduplication_key] = now()
+    deliveries, failures = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+        kind=escalation["kind"], spoken_message=escalation["spoken_message"],
+        explicit_help_request=escalation["explicit_help_request"],
+    ))
+    result["recipients_delivered"] = len(deliveries)
+    result["recipient_failures"] = " | ".join(failures[:3])
+    if not deliveries:
+        result["status"] = "failed"
+    else:
+        result["status"] = "sent" if any(delivery.message_id for _, delivery in deliveries) else "test_mode"
+    return result
+
+
+def _apply_acoustic_outcome(outcome: dict, at: datetime, signal: str) -> dict:
+    """Record the acoustic episode in the timeline and dispatch any escalation."""
+    label = ACOUSTIC_SIGNAL_LABELS.get(signal, signal)
+    action = outcome.get("action")
+    if action == "ask":
+        repository.add_event(EventCreate(
+            kind="episode",
+            summary=f"Posible {label}: se pregunta al paciente «{outcome['question']}»",
+            source="glasses", severity="attention", occurred_at=at,
+            metadata={"acoustic_signal": signal, "acoustic_stage": "check_in",
+                      "episode_id": outcome.get("episode_id", "")},
+        ))
+        outcome["alert"] = None
+    elif action == "escalate":
+        escalation = outcome["escalation"]
+        alert = dispatch_acoustic_escalation(escalation)
+        repository.add_event(EventCreate(
+            kind="hazard", summary=escalation["spoken_message"], source="glasses",
+            severity="urgent", occurred_at=at,
+            metadata={"acoustic_signal": escalation["signal"], "acoustic_stage": "escalated",
+                      "acoustic_reason": escalation["reason"], "alert_status": alert["status"],
+                      "recipients_attempted": alert["recipients_attempted"],
+                      "recipients_delivered": alert["recipients_delivered"]},
+        ))
+        outcome["alert"] = alert
+    return outcome
+
+
+@app.post("/v1/acoustic-events")
+def register_acoustic_event(request: AcousticDetectionCreate, authorization: Optional[str] = Header(default=None)) -> dict:
+    """Report an acoustic detection from the glasses and get the next action."""
+    require_auth(authorization)
+    at = request.occurred_at or now()
+    outcome = acoustic_listening.detect(request.signal, request.confidence, at)
+    return _apply_acoustic_outcome(outcome, at, request.signal)
+
+
+@app.post("/v1/acoustic-events/response")
+def respond_to_acoustic_check_in(request: AcousticResponseCreate, authorization: Optional[str] = Header(default=None)) -> dict:
+    """Register the patient's answer to the check-in question."""
+    require_auth(authorization)
+    at = request.occurred_at or now()
+    signal = acoustic_listening.active_episode.signal if acoustic_listening.active_episode else ""
+    outcome = acoustic_listening.respond(request.text, at)
+    return _apply_acoustic_outcome(outcome, at, signal)
+
+
+@app.post("/v1/acoustic-events/tick")
+def tick_acoustic_listening(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Advance time-based logic (response timeout and limited retries)."""
+    require_auth(authorization)
+    at = now()
+    signal = acoustic_listening.active_episode.signal if acoustic_listening.active_episode else ""
+    outcome = acoustic_listening.tick(at)
+    return _apply_acoustic_outcome(outcome, at, signal)
+
+
+@app.get("/v1/acoustic-episodes")
+def list_acoustic_episodes(authorization: Optional[str] = Header(default=None)) -> dict:
+    require_auth(authorization)
+    active = acoustic_listening.active_episode
+    return {
+        "active": active.snapshot() if active else None,
+        "history": [episode.snapshot() for episode in reversed(acoustic_listening.history)],
+    }
