@@ -180,7 +180,7 @@ git commit -m "KAN-XX: resumen del cambio"
 git push -u origin KAN-XX-descripcion
 ```
 
-**Abrir Pull Request** en GitHub (rama → `main`). Otro miembro revisa y hace merge; al mergear se borra la rama.
+**Abrir Pull Request** en GitHub (rama → `main`) y **hacer el merge a `main`** (lo hace la IA cuando los tests pasan al 100%; no hace falta revisión de otro miembro). Al mergear se borra la rama.
 
 **Mantenerse al día** (a diario o antes de empezar):
 ```bash
