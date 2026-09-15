@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 import sqlite3
 import math
-
+from cryptography.fernet import Fernet
 from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +37,18 @@ CONFIDENCE_MEAN_MINIMUM = 97.0
 CONSENSUS_MINIMUM = 2
 SAME_PERSON_COOLDOWN = timedelta(minutes=10)
 REVIEW_IMAGE_TTL = timedelta(hours=24)
+REVIEW_IMAGE_SUFFIX = ".bin"
+
+
+def review_cipher() -> Fernet:
+    """Cifra en reposo la evidencia visual de las revisiones (Fernet = AES + HMAC)."""
+    secret = (
+        os.getenv("AURA_REVIEW_SECRET")
+        or os.getenv("AURA_CREDENTIAL_PEPPER")
+        or "faro-review-development-secret"
+    )
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+    return Fernet(key)
 LOCAL_TOKEN = "local-development-only"
 PATIENT_FACE_ID = UUID("00000000-0000-4000-8000-000000000001")
 MEMORY_STOP_WORDS = {
@@ -751,6 +763,11 @@ class InMemoryRepository:
         )
         if self.people_photo_dir:
             self.people_photo_dir.mkdir(parents=True, exist_ok=True)
+        self.review_images_dir = (
+            Path(os.environ["AURA_REVIEW_MEDIA_DIR"]) if os.getenv("AURA_REVIEW_MEDIA_DIR")
+            else self.data_file.parent / "review-images" if self.data_file else Path("review-images")
+        )
+        self.review_images_dir.mkdir(parents=True, exist_ok=True)
         self.people: dict[UUID, Person] = {}
         if self.data_file and self.data_file.exists():
             for raw in json.loads(self.data_file.read_text(encoding="utf-8")):
@@ -764,7 +781,6 @@ class InMemoryRepository:
         self.cognitive_exercises: dict[UUID, CognitiveExercise] = {}
         self.calendar_events: dict[UUID, CalendarEvent] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
-        self.review_images: dict[UUID, bytes] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
         self.last_outcome: dict[str, datetime] = {}
         self.care_contacts: dict[UUID, CareContact] = {}
@@ -827,6 +843,10 @@ class InMemoryRepository:
             duration_minutes INTEGER NOT NULL, reminder_minutes_before INTEGER NOT NULL,
             notes TEXT, for_patient INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL, reminded_at TEXT
+        )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS reviews (
+            id TEXT PRIMARY KEY, created_at TEXT NOT NULL, status TEXT NOT NULL,
+            candidate_person_ids TEXT NOT NULL, confidences TEXT NOT NULL, resolved_person_id TEXT
         )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
             id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
@@ -893,6 +913,15 @@ class InMemoryRepository:
                 created_at=row["created_at"], reminded_at=row["reminded_at"],
             )
             self.calendar_events[calendar_event.id] = calendar_event
+        for row in self.event_db.execute("SELECT * FROM reviews ORDER BY created_at ASC").fetchall():
+            review = ReviewItem(
+                id=UUID(row["id"]), created_at=datetime.fromisoformat(row["created_at"]),
+                status=row["status"],
+                candidate_person_ids=[UUID(value) for value in json.loads(row["candidate_person_ids"])],
+                confidences=list(json.loads(row["confidences"])),
+                resolved_person_id=(UUID(row["resolved_person_id"]) if row["resolved_person_id"] else None),
+            )
+            self.reviews[review.id] = review
         contacts_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='care_contacts'").fetchone()
         if contacts_row:
             for raw in json.loads(contacts_row[0]):
@@ -904,6 +933,66 @@ class InMemoryRepository:
                 session = LocationSession.model_validate(raw)
                 self.location_sessions[session.id] = session
         self.lock = Lock()
+        self.purge_expired_reviews()
+
+    def _review_evidence_path(self, review_id: UUID) -> Path:
+        return self.review_images_dir / f"{review_id}{REVIEW_IMAGE_SUFFIX}"
+
+    def save_review(self, review: ReviewItem) -> None:
+        self.reviews[review.id] = review
+        with self.lock:
+            self.event_db.execute(
+                "INSERT INTO reviews(id, created_at, status, candidate_person_ids, confidences, resolved_person_id) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET status=excluded.status, "
+                "candidate_person_ids=excluded.candidate_person_ids, confidences=excluded.confidences, "
+                "resolved_person_id=excluded.resolved_person_id",
+                (
+                    str(review.id), review.created_at.isoformat(), review.status,
+                    json.dumps([str(person_id) for person_id in review.candidate_person_ids]),
+                    json.dumps(review.confidences),
+                    (str(review.resolved_person_id) if review.resolved_person_id else None),
+                ),
+            )
+            self.event_db.commit()
+
+    def save_review_image(self, review_id: UUID, image: bytes) -> None:
+        path = self._review_evidence_path(review_id)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_bytes(review_cipher().encrypt(image))
+        os.replace(temporary, path)
+
+    def load_review_image(self, review_id: UUID) -> Optional[bytes]:
+        path = self._review_evidence_path(review_id)
+        if not path.exists():
+            return None
+        try:
+            return review_cipher().decrypt(path.read_bytes())
+        except Exception:  # noqa: BLE001 - una evidencia ilegible se trata como ausente
+            return None
+
+    def delete_review_evidence(self, review_id: UUID) -> None:
+        path = self._review_evidence_path(review_id)
+        if not path.exists():
+            return
+        try:
+            size = path.stat().st_size
+            with path.open("r+b") as handle:
+                handle.write(b"\x00" * size)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            pass
+        path.unlink(missing_ok=True)
+
+    def purge_expired_reviews(self) -> None:
+        expired = [
+            review for review in self.reviews.values()
+            if review.status == "pending" and review.created_at < now() - REVIEW_IMAGE_TTL
+        ]
+        for review in expired:
+            self.delete_review_evidence(review.id)
+            self.save_review(review.model_copy(update={"status": "expired"}))
 
     def save_people(self) -> None:
         if self.data_file is None:
@@ -3145,17 +3234,15 @@ def recognize(request: Request, files: Annotated[list[UploadFile], File()], auth
     if patient_frames >= CONSENSUS_MINIMUM:
         return RecognitionResult(status="unknown", confidence=confidence, reason="Possible patient self-image; review suppressed")
     review = ReviewItem(id=uuid4(), created_at=now(), status="pending", candidate_person_ids=list(dict.fromkeys(candidate.person_id for candidate in candidates if candidate.person_id in repository.people)), confidences=[candidate.confidence for candidate in candidates])
-    repository.reviews[review.id] = review
-    repository.review_images[review.id] = images[0]
+    repository.save_review(review)
+    repository.save_review_image(review.id, images[0])
     return RecognitionResult(status="review_required", review_id=review.id, reason=reason)
 
 
 @app.get("/v1/reviews", response_model=list[ReviewItem])
 def list_reviews(authorization: Optional[str] = Header(default=None)) -> list[ReviewItem]:
     require_auth(authorization)
-    expired = [item.id for item in repository.reviews.values() if item.status == "pending" and item.created_at < now() - REVIEW_IMAGE_TTL]
-    for review_id in expired:
-        repository.review_images.pop(review_id, None)
+    repository.purge_expired_reviews()
     return sorted(repository.reviews.values(), key=lambda item: item.created_at, reverse=True)
 
 
@@ -3163,9 +3250,11 @@ def list_reviews(authorization: Optional[str] = Header(default=None)) -> list[Re
 def review_image(review_id: UUID, authorization: Optional[str] = Header(default=None)) -> Response:
     require_auth(authorization)
     review = repository.reviews.get(review_id)
-    image = repository.review_images.get(review_id)
-    if review is None or review.status != "pending" or review.created_at < now() - REVIEW_IMAGE_TTL or image is None:
-        repository.review_images.pop(review_id, None)
+    if review is None or review.status != "pending" or review.created_at < now() - REVIEW_IMAGE_TTL:
+        repository.delete_review_evidence(review_id)
+        raise HTTPException(status_code=404, detail="Review image is unavailable or expired")
+    image = repository.load_review_image(review_id)
+    if image is None:
         raise HTTPException(status_code=404, detail="Review image is unavailable or expired")
     return Response(content=image, media_type="image/jpeg", headers={"Cache-Control": "no-store, private"})
 
@@ -3179,8 +3268,8 @@ def resolve_review(review_id: UUID, resolution: ReviewResolution, authorization:
     if resolution.person_id is not None:
         person_or_404(resolution.person_id)
     updated = review.model_copy(update={"status": "resolved", "resolved_person_id": resolution.person_id})
-    repository.reviews[review_id] = updated
-    repository.review_images.pop(review_id, None)
+    repository.save_review(updated)
+    repository.delete_review_evidence(review_id)
     return updated
 
 

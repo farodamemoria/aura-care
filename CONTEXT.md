@@ -113,13 +113,13 @@ Componentes del producto:
 ## 6. Arquitectura técnica del backend (`aura-care`)
 
 - **FastAPI** "AURA Care" v0.2.0 (`app/main.py`), servido con uvicorn en `0.0.0.0:8082`.
-- **Persistencia:** SQLite (`faro-events.db`) + ficheros (fotos de caras en `person-photos/`).
+- **Persistencia:** SQLite (`faro-events.db`) + ficheros (fotos en `person-photos/`; evidencia de revisiones cifrada en `review-images/`).
 - **Auth:** cabecera `Authorization: Bearer <AURA_LOCAL_TOKEN>` (token configurado en el servidor; sin valor por defecto: si falta, el fallo es cerrado). Objetivo producción: JWT de Cognito validado por API Gateway.
 - **Zona horaria** del "día" del paciente: `Europe/Madrid` (`AURA_FAMILY_TIMEZONE`).
 - **Idiomas** del chat: es/gl/en (`AURA_FAMILY_LANGUAGE`, por defecto `es`).
 
 ### Tablas SQLite
-`events`, `configuration`, `pairing_invites`, `device_credentials`, `memories`, `family_messages`, `whatsapp_status`, `family_alert_rules`.
+`events`, `configuration`, `pairing_invites`, `device_credentials`, `memories`, `object_memories`, `medication_plans`, `medication_doses`, `safe_zones`, `cognitive_exercises`, `calendar_events`, `reviews`, `family_messages`, `whatsapp_status`, `family_alert_rules`.
 
 ### Endpoints principales
 - Salud/versión: `GET /health`, `GET /v1/version`
@@ -138,7 +138,7 @@ Componentes del producto:
 - Onboarding: `GET/PUT /v1/onboarding`
 
 ### Variables de entorno (servicio `aura-backend`)
-`AURA_EVENT_DB`, `AURA_DATA_FILE`, `AURA_FACE_PROVIDER=rekognition`, `AURA_REKOGNITION_COLLECTION=faro-faces`, `AWS_REGION=us-east-2`, `AURA_LOCAL_TOKEN`, `AURA_WHATSAPP_PHONE_NUMBER_ID`, `AURA_WHATSAPP_TOKEN`, `AURA_WHATSAPP_TEMPLATE=faro_emergency_alert`, `AURA_WHATSAPP_TEMPLATE_LANG=es`, `AURA_WHATSAPP_PREFER_TEMPLATE=1`, `AURA_WHATSAPP_VERIFY_TOKEN=faro-whatsapp-verify`, `AURA_OPENAI_API_KEY` / `OPENAI_API_KEY`, `AURA_OPENAI_MODEL=gpt-4.1-mini`, `AURA_FAMILY_LANGUAGE=es`, `AURA_FAMILY_TIMEZONE=Europe/Madrid`.
+`AURA_EVENT_DB`, `AURA_DATA_FILE`, `AURA_REVIEW_MEDIA_DIR`, `AURA_REVIEW_SECRET`, `AURA_FACE_PROVIDER=rekognition`, `AURA_REKOGNITION_COLLECTION=faro-faces`, `AWS_REGION=us-east-2`, `AURA_LOCAL_TOKEN`, `AURA_WHATSAPP_PHONE_NUMBER_ID`, `AURA_WHATSAPP_TOKEN`, `AURA_WHATSAPP_TEMPLATE=faro_emergency_alert`, `AURA_WHATSAPP_TEMPLATE_LANG=es`, `AURA_WHATSAPP_PREFER_TEMPLATE=1`, `AURA_WHATSAPP_VERIFY_TOKEN=faro-whatsapp-verify`, `AURA_OPENAI_API_KEY` / `OPENAI_API_KEY`, `AURA_OPENAI_MODEL=gpt-4.1-mini`, `AURA_FAMILY_LANGUAGE=es`, `AURA_FAMILY_TIMEZONE=Europe/Madrid`.
 
 ### Frontend (`web/`)
 `index.html`, `assets/app.js`, `assets/app.css`, `assets/family.css`, `assets/events.css`, `assets/people.css`, `assets/care.css`, `assets/patient.css`, `assets/sw.js` (service worker), `assets/manifest.webmanifest`.
