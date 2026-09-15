@@ -179,6 +179,41 @@ class MedicationTickResult(BaseModel):
     escalations: list[MedicationEscalation]
 
 
+class SafeZoneCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_meters: float = Field(gt=0, le=100000)
+    enabled: bool = True
+
+
+class SafeZone(SafeZoneCreate):
+    id: UUID
+    created_at: datetime
+
+
+class SafeZoneUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    radius_meters: Optional[float] = Field(default=None, gt=0, le=100000)
+    enabled: Optional[bool] = None
+
+
+class SafeZoneCheck(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_meters: Optional[float] = Field(default=None, ge=0, le=10000)
+
+
+class SafeZoneStatus(BaseModel):
+    status: str = Field(pattern="^(inside|outside|no_zones)$")
+    zone: Optional[SafeZone] = None
+    distance_meters: Optional[float] = None
+    message: str
+    family_alert_status: Optional[str] = None
+
+
 class FaceCandidate(BaseModel):
     person_id: UUID
     confidence: float = Field(ge=0, le=100)
@@ -653,6 +688,7 @@ class InMemoryRepository:
         self.object_memories: dict[UUID, ObjectMemory] = {}
         self.medication_plans: dict[UUID, MedicationPlan] = {}
         self.medication_doses: dict[UUID, MedicationDose] = {}
+        self.safe_zones: dict[UUID, SafeZone] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
         self.review_images: dict[UUID, bytes] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
@@ -703,6 +739,10 @@ class InMemoryRepository:
             escalated_at TEXT, created_at TEXT NOT NULL
         )""")
         self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_medication_doses ON medication_doses(plan_id, scheduled_at)")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS safe_zones (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
+            radius_meters REAL NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+        )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
             id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
             content TEXT NOT NULL, created_at TEXT NOT NULL
@@ -744,6 +784,12 @@ class InMemoryRepository:
                 escalated_at=row["escalated_at"], created_at=row["created_at"],
             )
             self.medication_doses[dose.id] = dose
+        for row in self.event_db.execute("SELECT * FROM safe_zones ORDER BY created_at ASC").fetchall():
+            zone = SafeZone(
+                id=row["id"], name=row["name"], latitude=row["latitude"], longitude=row["longitude"],
+                radius_meters=row["radius_meters"], enabled=bool(row["enabled"]), created_at=row["created_at"],
+            )
+            self.safe_zones[zone.id] = zone
         contacts_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='care_contacts'").fetchone()
         if contacts_row:
             for raw in json.loads(contacts_row[0]):
@@ -986,6 +1032,20 @@ class InMemoryRepository:
                      dose.escalated_at.isoformat() if dose.escalated_at else None,
                      dose.created_at.isoformat())
                     for dose in self.medication_doses.values()
+                ],
+            )
+            self.event_db.commit()
+
+    def save_safe_zones(self) -> None:
+        with self.lock:
+            self.event_db.execute("DELETE FROM safe_zones")
+            self.event_db.executemany(
+                "INSERT INTO safe_zones(id, name, latitude, longitude, radius_meters, enabled, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (str(zone.id), zone.name, zone.latitude, zone.longitude, zone.radius_meters,
+                     1 if zone.enabled else 0, zone.created_at.isoformat())
+                    for zone in self.safe_zones.values()
                 ],
             )
             self.event_db.commit()
@@ -1728,6 +1788,7 @@ def update_location_session(
     session = session.model_copy(update={"last_location": normalized})
     repository.location_sessions[session.id] = session
     repository.save_location_sessions()
+    handle_safe_zone_alert(normalized.latitude, normalized.longitude, normalized.accuracy_meters, source="phone")
     return session
 
 
@@ -1751,6 +1812,138 @@ def stop_location_session(
     repository.location_sessions[session.id] = session
     repository.save_location_sessions()
     return session
+
+
+SAFE_ZONE_ALERT_DEDUP = timedelta(minutes=15)
+SAFE_ZONE_ACCURACY_MARGIN = 50.0
+
+
+def patient_name_label() -> str:
+    profile = repository.get_patient_profile()
+    if profile and profile.preferred_name:
+        return profile.preferred_name
+    return "La persona cuidada"
+
+
+def safe_zone_evaluation(
+    latitude: float, longitude: float, accuracy_meters: Optional[float],
+) -> Optional[tuple[str, Optional[SafeZone], float]]:
+    zones = [zone for zone in repository.safe_zones.values() if zone.enabled]
+    if not zones:
+        return None
+    margin = max(0.0, min(accuracy_meters or 0.0, SAFE_ZONE_ACCURACY_MARGIN))
+    nearest_zone: Optional[SafeZone] = None
+    nearest_distance = 0.0
+    for zone in zones:
+        distance = distance_meters(latitude, longitude, zone.latitude, zone.longitude)
+        if distance <= zone.radius_meters + margin:
+            return "inside", zone, round(distance, 1)
+        if nearest_zone is None or distance < nearest_distance:
+            nearest_zone, nearest_distance = zone, distance
+    return "outside", nearest_zone, round(nearest_distance, 1)
+
+
+def handle_safe_zone_alert(
+    latitude: float, longitude: float, accuracy_meters: Optional[float], source: str = "phone",
+) -> tuple[str, Optional[str]]:
+    """Evalua las zonas seguras y, si esta fuera, avisa una vez a la red de cuidados."""
+    evaluation = safe_zone_evaluation(latitude, longitude, accuracy_meters)
+    if evaluation is None:
+        return "no_zones", None
+    status, zone, distance = evaluation
+    if status == "inside":
+        repository.last_auto_alert.pop("safe_zone", None)
+        return "inside", None
+    previous = repository.last_auto_alert.get("safe_zone")
+    if previous and previous > now() - SAFE_ZONE_ALERT_DEDUP:
+        return "outside", None
+    repository.last_auto_alert["safe_zone"] = now()
+    where = f" a {distance:.0f} m de {zone.name}" if zone else ""
+    message = (
+        f"Faro: {patient_name_label()} puede estar desorientado; "
+        f"esta fuera de las zonas seguras{where}."
+    )
+    contacts = enabled_alert_contacts()
+    if contacts:
+        deliveries, _ = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+            kind="lost", spoken_message=message, explicit_help_request=False,
+            latitude=latitude, longitude=longitude,
+        ))
+        family_alert_status = (
+            "sent" if any(delivery.message_id for _, delivery in deliveries)
+            else "test_mode" if deliveries else "failed"
+        )
+    else:
+        family_alert_status = "no_contact"
+    repository.add_event(EventCreate(
+        kind="location", source=source, severity="attention", summary=message,
+        latitude=latitude, longitude=longitude,
+        metadata={"hazard": "safe_zone", "zone_id": str(zone.id) if zone else "",
+                  "distance_meters": distance, "family_alert_status": family_alert_status},
+    ))
+    return "outside", family_alert_status
+
+
+@app.post("/v1/safe-zones", response_model=SafeZone, status_code=201)
+def create_safe_zone(request: SafeZoneCreate, authorization: Optional[str] = Header(default=None)) -> SafeZone:
+    require_auth(authorization)
+    zone = SafeZone(id=uuid4(), created_at=now(), **request.model_dump())
+    repository.safe_zones[zone.id] = zone
+    repository.save_safe_zones()
+    return zone
+
+
+@app.get("/v1/safe-zones", response_model=list[SafeZone])
+def list_safe_zones(authorization: Optional[str] = Header(default=None)) -> list[SafeZone]:
+    require_auth(authorization)
+    return sorted(repository.safe_zones.values(), key=lambda zone: zone.created_at)
+
+
+@app.patch("/v1/safe-zones/{zone_id}", response_model=SafeZone)
+def update_safe_zone(
+    zone_id: UUID, request: SafeZoneUpdate, authorization: Optional[str] = Header(default=None),
+) -> SafeZone:
+    require_auth(authorization)
+    zone = repository.safe_zones.get(zone_id)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="Safe zone not found")
+    updated = zone.model_copy(update=request.model_dump(exclude_unset=True))
+    repository.safe_zones[zone_id] = updated
+    repository.save_safe_zones()
+    return updated
+
+
+@app.delete("/v1/safe-zones/{zone_id}", status_code=204, response_class=Response)
+def delete_safe_zone(zone_id: UUID, authorization: Optional[str] = Header(default=None)) -> Response:
+    require_auth(authorization)
+    repository.safe_zones.pop(zone_id, None)
+    repository.save_safe_zones()
+    return Response(status_code=204)
+
+
+@app.post("/v1/safe-zones/check", response_model=SafeZoneStatus)
+def check_safe_zone(request: SafeZoneCheck, authorization: Optional[str] = Header(default=None)) -> SafeZoneStatus:
+    require_auth(authorization)
+    evaluation = safe_zone_evaluation(request.latitude, request.longitude, request.accuracy_meters)
+    if evaluation is None:
+        return SafeZoneStatus(status="no_zones", message="Todavia no hay zonas seguras configuradas.")
+    status, zone, distance = evaluation
+    if status == "inside":
+        repository.last_auto_alert.pop("safe_zone", None)
+        name = zone.name if zone else "la zona segura"
+        return SafeZoneStatus(
+            status="inside", zone=zone, distance_meters=distance,
+            message=f"Dentro de {name}. Todo en orden.",
+        )
+    _, family_alert_status = handle_safe_zone_alert(
+        request.latitude, request.longitude, request.accuracy_meters, source="phone",
+    )
+    where = f" (a {distance:.0f} m de {zone.name})" if zone else ""
+    return SafeZoneStatus(
+        status="outside", zone=zone, distance_meters=distance,
+        message=f"Fuera de las zonas seguras{where}. Se avisa a la familia.",
+        family_alert_status=family_alert_status,
+    )
 
 
 @app.get("/v1/location-share/{share_token}", response_model=LocationSession)

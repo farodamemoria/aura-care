@@ -108,7 +108,15 @@ materializadas (`medication_doses`) con estados `pending`, `taken`, `escalated` 
 pasada la tolerancia (20 minutos), se escala como aviso `medication` a la red de cuidados por
 WhatsApp y queda en la línea de tiempo. Horarios en la zona horaria familiar (`Europe/Madrid`).
 
-### 2.6 Inventario de endpoints
+### 2.6 Zonas seguras y geocercas
+
+Zonas por paciente (`safe_zones`: nombre, centro y radio) con CRUD. `POST /v1/safe-zones/check`
+evalúa un punto y, si queda fuera de todas las zonas activas (con un margen por la precisión del
+GPS, hasta 50 m), avisa una sola vez cada 15 minutos a la red de cuidados por WhatsApp (tipo
+`lost`) y deja el evento en la línea de tiempo. La evaluación también se ejecuta al actualizar una
+sesión de ubicación, para que el escalado sea automático durante el seguimiento.
+
+### 2.7 Inventario de endpoints
 
 Portal y estáticos:
 
@@ -176,6 +184,11 @@ Medicación:
   `PATCH /v1/medication-plans/{plan_id}`, `DELETE /v1/medication-plans/{plan_id}`,
   `GET /v1/medication-doses`, `POST /v1/medication-doses/{dose_id}/confirm`,
   `POST /v1/medication-tick`.
+
+Zonas seguras:
+
+- `POST /v1/safe-zones`, `GET /v1/safe-zones`, `PATCH /v1/safe-zones/{zone_id}`,
+  `DELETE /v1/safe-zones/{zone_id}`, `POST /v1/safe-zones/check`.
 
 Conversación familiar:
 
