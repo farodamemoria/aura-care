@@ -3,9 +3,9 @@
 Uso:
     python scripts/kan85_verificar_demo.py
 
-Comprueba, contra produccion (CloudFront), el portal, la salud del backend, la
-version con sus funcionalidades y las tres descargas de APK (peticion parcial
-para no bajar el APK grande). No necesita token.
+Comprueba el portal, la salud del backend, la version con sus funcionalidades y
+las tres descargas de APK (peticion parcial para no bajar el APK grande). Las
+descargas ahora se sirven desde el repo publico faro-apks en GitHub.
 """
 
 from __future__ import annotations
@@ -31,15 +31,16 @@ COMPROBACIONES = [
     {"id": "salud", "path": "/health", "tipo": "json", "descripcion": "Backend operativo (status ok)"},
     {"id": "version", "path": "/v1/version", "tipo": "json", "descripcion": "Funciones de la demo presentes"},
     {"id": "assetlinks", "path": "/.well-known/assetlinks.json", "tipo": "json", "descripcion": "TWA enlazada (a pantalla completa)"},
-    {"id": "apk-faro-familia", "path": "/download/faro.apk", "tipo": "archivo", "descripcion": "Descarga Faro Familia"},
-    {"id": "apk-camera-access", "path": "/download/camera-access.apk", "tipo": "archivo", "descripcion": "Descarga App gafas (Camera Access)"},
-    {"id": "apk-faro-movil", "path": "/download/faro-movil.apk", "tipo": "archivo", "descripcion": "Descarga Faro Movil"},
+    {"id": "apk-faro-familia", "path": "https://github.com/farodamemoria/faro-apks/releases/download/apk-2026-09-15/com.faro.familia-base.apk", "tipo": "archivo", "descripcion": "Descarga Faro Familia"},
+    {"id": "apk-camera-access", "path": "https://github.com/farodamemoria/faro-apks/releases/download/voz-2026-09-15/camera-access-voz.apk", "tipo": "archivo", "descripcion": "Descarga App gafas (Camera Access)"},
+    {"id": "apk-faro-movil", "path": "https://github.com/farodamemoria/faro-apks/releases/download/apk-2026-09-15/com.faro.memoria.mobile-base.apk", "tipo": "archivo", "descripcion": "Descarga Faro Movil"},
 ]
 
 
 def _peticion(path: str, headers: dict | None = None):
+    url = path if path.startswith("http") else BASE + path
     req = urllib.request.Request(
-        BASE + path,
+        url,
         headers={"User-Agent": "faro-kan85-verificador", **(headers or {})},
     )
     return urllib.request.urlopen(req, timeout=TIMEOUT)
