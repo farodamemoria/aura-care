@@ -3782,15 +3782,21 @@ def calendar_family_message(event: CalendarEvent) -> str:
 
 
 def dispatch_calendar_family_reminder(message: str) -> dict:
-    """Avisa por WhatsApp a la red de cuidados de un recordatorio para la familia."""
+    """Avisa por WhatsApp a la red de cuidados de un recordatorio de la familia."""
     contacts = enabled_alert_contacts()
     if not contacts:
-        return {"status": "no_contact", "recipients_delivered": 0}
-    deliveries, _ = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+        return {"status": "no_contact", "recipients_delivered": 0, "recipient_failures": ""}
+    deliveries, failures = send_alert_to_contacts(contacts, EmergencyAlertCreate(
         kind="reminder", spoken_message=message, explicit_help_request=False,
     ))
     delivered = sum(1 for _, delivery in deliveries if delivery.message_id)
-    return {"status": "sent" if delivered else "test_mode", "recipients_delivered": delivered}
+    if failures:
+        logging.getLogger("aura.calendar").warning("aviso de agenda no entregado: %s", "; ".join(failures))
+    return {
+        "status": "sent" if delivered else "test_mode",
+        "recipients_delivered": delivered,
+        "recipient_failures": "; ".join(failures)[:300],
+    }
 
 
 @app.post("/v1/calendar-events", response_model=CalendarEvent, status_code=201)
@@ -3853,6 +3859,11 @@ def run_calendar_tick(reference: Optional[datetime] = None) -> CalendarTickResul
             event_id=event.id, title=event.title, category=event.category,
             start_at=event.start_at, message=message, for_patient=event.for_patient,
         ))
+        delivery: dict = {"status": "queued", "recipients_delivered": 0, "recipient_failures": ""}
+        if not event.for_patient:
+            delivery = dispatch_calendar_family_reminder(calendar_family_message(event))
+        else:
+            repository.enqueue_voice_reminder(event.id, message)
         repository.add_event(EventCreate(
             kind="routine", source="backend", severity="info",
             summary=(
@@ -3860,12 +3871,11 @@ def run_calendar_tick(reference: Optional[datetime] = None) -> CalendarTickResul
                 f"{event.start_at.astimezone(family_zone()).strftime('%H:%M')}"
             ),
             metadata={"calendar_event_id": str(event.id), "category": event.category,
-                      "for_patient": event.for_patient},
+                      "for_patient": event.for_patient,
+                      "family_alert_status": delivery.get("status"),
+                      "recipients_delivered": delivery.get("recipients_delivered", 0),
+                      "recipient_failures": delivery.get("recipient_failures", "")},
         ))
-        if not event.for_patient:
-            dispatch_calendar_family_reminder(calendar_family_message(event))
-        else:
-            repository.enqueue_voice_reminder(event.id, message)
         next_start = next_calendar_occurrence(event, reference) if event.recurrence != "none" else None
         if next_start is not None:
             repository.calendar_events[event.id] = event.model_copy(
