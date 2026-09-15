@@ -1,0 +1,13 @@
+.agenda-card{margin-bottom:20px}
+.agenda-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.agenda-item{display:grid;gap:6px;background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--soft-shadow)}
+.agenda-item strong{font-size:16px}
+.agenda-item small{color:var(--muted)}
+.agenda-item-disabled{opacity:.6}
+.agenda-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.agenda-actions button{padding:8px 12px;font-size:13px}
+.agenda-actions .text-danger{grid-column:auto;background:transparent;color:var(--coral)}
+.agenda-edit{margin-top:8px}
+.agenda-edit button{margin-top:8px}
+.agenda-category{display:inline-block;padding:2px 8px;border-radius:99px;background:var(--mint);color:var(--green);font-size:11px;font-weight:700}
+@media(max-width:720px){.agenda-grid{grid-template-columns:1fr}}

@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/assets/care.css?v=1">
   <link rel="stylesheet" href="/assets/patient.css?v=1">
   <link rel="stylesheet" href="/assets/family.css?v=3">
+  <link rel="stylesheet" href="/assets/agenda.css?v=1">
 </head>
 <body>
   <header class="hero">
@@ -33,6 +34,7 @@
       <button class="tab" data-view="care-view">Cuidados</button>
       <button class="tab" data-view="memory-view">Memoria</button>
       <button class="tab" data-view="exercises-view">Ejercicios</button>
+      <button class="tab" data-view="agenda-view">Agenda</button>
     </nav>
     <section id="patient-view" class="view active">
       <div class="section-heading"><div><span class="kicker">Quien usa las gafas</span><h2>Ficha del paciente</h2><p>Información propia de la persona a la que acompaña Faro. No se mezcla con familiares, cuidadores ni personas reconocidas.</p></div></div>
@@ -116,8 +118,26 @@
       <p id="exercise-summary" class="status-line">Sin resultados todavía.</p>
       <div id="exercises" class="review-grid" aria-live="polite"></div>
     </section>
+    <section id="agenda-view" class="view">
+      <div class="section-heading"><div><span class="kicker">Rutinas y citas</span><h2>Agenda</h2><p>Programa recordatorios para el paciente y para la familia. Faro los avisa a su hora y quedan en la memoria.</p></div><button id="agenda-refresh" class="secondary">Actualizar</button></div>
+      <article class="card agenda-card">
+        <h3>Nuevo recordatorio</h3>
+        <form id="agenda-form" class="form-grid">
+          <label>Título<input name="title" required maxlength="120" placeholder="Pastilla de la tensión, visita al médico…"></label>
+          <label>Categoría<select name="category"><option value="medication">Medicación</option><option value="routine" selected>Rutina</option><option value="appointment">Cita</option><option value="other">Otra cosa</option></select></label>
+          <label>Fecha y hora<input name="start_at" type="datetime-local" required></label>
+          <label>Duración (minutos)<input name="duration_minutes" type="number" min="0" max="1440" value="30" inputmode="numeric"></label>
+          <label>Aviso previo (minutos)<input name="reminder_minutes_before" type="number" min="0" max="1440" value="15" inputmode="numeric"></label>
+          <label>Notas (opcional)<textarea name="notes" maxlength="500"></textarea></label>
+          <label class="check"><input name="for_patient" type="checkbox" checked><span>Es para el paciente</span></label>
+          <button class="primary">Programar recordatorio</button>
+        </form>
+        <p id="agenda-status" class="status-line">Sin recordatorios todavía.</p>
+      </article>
+      <div id="agenda-events" class="agenda-grid" aria-live="polite"></div>
+    </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir 5 fotos</span><input type="file" name="files" accept="image/jpeg,image/png" capture="user" multiple required></label><div class="file-hint">Frontal, con buena luz y sin otras personas.</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
-  <script src="/assets/app.js?v=22" defer></script>
+  <script src="/assets/app.js?v=23" defer></script>
 </body>
 </html>

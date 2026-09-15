@@ -20,10 +20,10 @@ async function load() {
   try {
     const health = await fetch('/health').then(response => response.json());
     document.querySelector('#connection').textContent = `Conectado · ${health.face_provider === 'RekognitionFaceProvider' ? 'reconocimiento activo' : 'modo de prueba'}`;
-    const [people, reviews, contacts, patient, events, tracking, exercises, exerciseSummary] = await Promise.all([
+    const [people, reviews, contacts, patient, events, tracking, exercises, exerciseSummary, agenda] = await Promise.all([
       api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
       api('/v1/events?limit=100'), api('/v1/location-sessions/active'),
-      api('/v1/cognitive-exercises'), api('/v1/cognitive-exercises/summary'),
+      api('/v1/cognitive-exercises'), api('/v1/cognitive-exercises/summary'), api('/v1/calendar-events'),
     ]);
     const pending = reviews.filter(review => review.status === 'pending');
     document.querySelector('#people-count').textContent = people.length;
@@ -45,6 +45,7 @@ async function load() {
     renderEvents(events);
     renderTracking(tracking);
     renderExercises(exercises, exerciseSummary);
+    renderAgenda(agenda);
   } catch (error) {
     document.querySelector('#connection').textContent = 'Sin conexión';
     notify(error);
@@ -143,6 +144,48 @@ function renderExercises(exercises, summary) {
     target.append(article);
   }
   if (!target.children.length) target.append(empty('Todavía no hay ejercicios. Genera uno desde un recuerdo verificado.'));
+}
+
+const agendaCategoryLabels = {medication: 'Medicación', routine: 'Rutina', appointment: 'Cita', other: 'Otra cosa'};
+const agendaCategoryIcons = {medication: '💊', routine: '↻', appointment: '📅', other: '•'};
+function toLocalInput(value) {
+  const date = new Date(value), offset = date.getTimezoneOffset();
+  return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 16);
+}
+function renderAgenda(events) {
+  const target = document.querySelector('#agenda-events');
+  if (!target) return;
+  const line = document.querySelector('#agenda-status');
+  if (line) line.textContent = events.length
+    ? `${events.length} ${events.length === 1 ? 'recordatorio programado' : 'recordatorios programados'}.`
+    : 'Sin recordatorios todavía.';
+  target.replaceChildren();
+  for (const event of events) {
+    const article = document.createElement('article'), title = document.createElement('strong'),
+      meta = document.createElement('small'), actions = document.createElement('div'), form = document.createElement('form');
+    article.className = event.enabled ? 'agenda-item' : 'agenda-item agenda-item-disabled';
+    title.textContent = `${agendaCategoryIcons[event.category] || '•'} ${event.title}`;
+    meta.textContent = `${agendaCategoryLabels[event.category] || event.category} · ${new Date(event.start_at).toLocaleString()} · aviso ${event.reminder_minutes_before} min antes · ${event.for_patient ? 'paciente' : 'familia'}`;
+    actions.className = 'agenda-actions';
+    const toggle = document.createElement('button'); toggle.className = 'secondary';
+    toggle.textContent = event.enabled ? 'Desactivar' : 'Activar';
+    toggle.onclick = async () => { try { await api(`/v1/calendar-events/${event.id}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled: !event.enabled})}); await load(); } catch (error) { notify(error); } };
+    const edit = document.createElement('button'); edit.className = 'secondary'; edit.textContent = 'Cambiar hora';
+    form.className = 'agenda-edit'; form.hidden = true;
+    const label = document.createElement('label'); label.textContent = 'Nueva fecha y hora';
+    const input = document.createElement('input'); input.type = 'datetime-local'; input.required = true; input.value = toLocalInput(event.start_at);
+    label.append(input);
+    const save = document.createElement('button'); save.className = 'primary'; save.textContent = 'Guardar';
+    form.append(label, save);
+    form.onsubmit = async submitEvent => { submitEvent.preventDefault(); if (!input.value) return notify(new Error('Indica la fecha y la hora.')); try { await api(`/v1/calendar-events/${event.id}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({start_at: new Date(input.value).toISOString()})}); await load(); } catch (error) { notify(error); } };
+    edit.onclick = () => { form.hidden = !form.hidden; };
+    const remove = document.createElement('button'); remove.className = 'text-danger'; remove.textContent = 'Eliminar';
+    remove.onclick = async () => { if (!confirm(`¿Eliminar el recordatorio «${event.title}»?`)) return; try { await api(`/v1/calendar-events/${event.id}`, {method: 'DELETE'}); await load(); } catch (error) { notify(error); } };
+    actions.append(toggle, edit, remove);
+    article.append(title, meta, actions, form);
+    target.append(article);
+  }
+  if (!events.length) target.append(empty('Programa el primer recordatorio con el formulario de arriba.'));
 }
 
 function fillPatient(patient) {
@@ -444,5 +487,28 @@ if (talkReset) {
 
 const exerciseRefresh = document.querySelector('#exercise-refresh');
 if (exerciseRefresh) exerciseRefresh.addEventListener('click', () => load());
+
+const agendaForm = document.querySelector('#agenda-form');
+if (agendaForm) {
+  agendaForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const data = new FormData(event.target);
+    const startAt = data.get('start_at');
+    if (!startAt) return notify(new Error('Indica la fecha y la hora.'));
+    const payload = {
+      title: data.get('title'), category: data.get('category'),
+      start_at: new Date(startAt).toISOString(),
+      duration_minutes: Number(data.get('duration_minutes') || 30),
+      reminder_minutes_before: Number(data.get('reminder_minutes_before') || 15),
+      notes: data.get('notes') || null,
+      for_patient: data.get('for_patient') === 'on',
+      enabled: true,
+    };
+    try { await api('/v1/calendar-events', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}); event.target.reset(); await load(); }
+    catch (error) { notify(error); }
+  });
+}
+const agendaRefresh = document.querySelector('#agenda-refresh');
+if (agendaRefresh) agendaRefresh.addEventListener('click', () => load());
 
 load();
