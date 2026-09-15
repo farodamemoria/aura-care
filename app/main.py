@@ -2816,6 +2816,18 @@ FAMILY_CALENDAR_TOOL = {
             },
             "avisar_minutos_antes": {"type": "integer", "description": "Minutos de antelación del aviso (0-1440)."},
             "para_paciente": {"type": "boolean", "description": "true si es para el paciente; false si es para la familia."},
+            "recurrencia": {
+                "type": "string",
+                "enum": ["ninguna", "diaria", "semanal", "mensual"],
+                "description": "Si se repite: una vez (ninguna), diaria, semanal o mensual.",
+            },
+            "repetir_cada": {"type": "integer", "description": "Cada cuántos días/semanas/meses se repite (por defecto 1)."},
+            "repetir_hasta": {"type": "string", "description": "Fecha final de la repetición en formato ISO (YYYY-MM-DD); opcional."},
+            "dias_semana": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Solo si la repetición es semanal: días 0=lunes, 1=martes, …, 6=domingo.",
+            },
             "notas": {"type": "string", "description": "Detalle opcional."},
         },
         "required": ["titulo", "fecha_hora"],
@@ -2856,11 +2868,32 @@ def execute_family_tool(name: str, arguments: str) -> dict:
         except (TypeError, ValueError):
             reminder = 15
         notes = args.get("notas")
+        recurrence_map = {"ninguna": "none", "diaria": "daily", "semanal": "weekly", "mensual": "monthly"}
+        recurrence = recurrence_map.get(str(args.get("recurrencia") or "ninguna"), "none")
+        try:
+            interval = int(args.get("repetir_cada", 1))
+        except (TypeError, ValueError):
+            interval = 1
+        recurrence_until = None
+        if args.get("repetir_hasta"):
+            try:
+                recurrence_until = date.fromisoformat(str(args["repetir_hasta"])[:10])
+            except ValueError:
+                recurrence_until = None
+        weekdays = args.get("dias_semana")
+        recurrence_weekdays = None
+        if recurrence == "weekly" and isinstance(weekdays, list):
+            recurrence_weekdays = sorted({
+                int(day) for day in weekdays
+                if isinstance(day, (int, float)) and 0 <= int(day) <= 6
+            })
         event = CalendarEvent(
             id=uuid4(), created_at=now(), title=title, category=category, start_at=start_at,
             duration_minutes=30, reminder_minutes_before=max(0, min(1440, reminder)),
             notes=(str(notes).strip() or None) if notes else None,
             for_patient=bool(args.get("para_paciente", True)), enabled=True,
+            recurrence=recurrence, recurrence_interval=max(1, min(366, interval)),
+            recurrence_until=recurrence_until, recurrence_weekdays=recurrence_weekdays,
         )
         repository.calendar_events[event.id] = event
         repository.save_calendar_events()
@@ -2938,10 +2971,12 @@ def openai_family_answer(
         "- No inventes funciones: NO existen informes periódicos o diarios, resúmenes programados "
         "ni envíos a demanda. Si te lo piden, dilo con naturalidad y ofrece solo lo que sí puedes "
         "hacer.\n"
-        "- Si el familiar pide programar o recordar algo (una pastilla, una cita, una rutina) para "
-        "el paciente o para la familia, llama a crear_recordatorio con el título y la fecha y hora "
-        "en ISO 8601; si falta la hora, pídesela antes de crearlo. Confírmale después que queda en "
-        "la agenda.\n"
+        "- Para crear un recordatorio necesitas TODOS estos campos: título, fecha y hora, categoría "
+        "(medicación/rutina/cita/otra), con cuántos minutos de antelación avisar, si es para el "
+        "paciente o para la familia y si se repite (una vez, diaria, semanal —indicando los días— o "
+        "mensual, «cada N» y hasta qué fecha). Si falta alguno, pregúntalo (de uno en uno, sin "
+        "interrogar); si no te dan la antelación, propón 15 minutos y confírmalo. Cuando tengas "
+        "todo, llama a crear_recordatorio y resume los datos para confirmar.\n"
         "- Si preguntan por la agenda o los próximos recordatorios, responde con «Agenda próxima»; "
         "si no aparece nada, dilo con claridad.\n"
         "- No inventes datos del paciente: usa solo los eventos y datos proporcionados; si algo no "
