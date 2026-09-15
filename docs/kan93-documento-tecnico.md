@@ -234,11 +234,11 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v28`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v29`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
-  `family.css`.
-- **Vistas** (pestañas): Paciente, Personas conocidas, Por aclarar, Cuidados y Memoria.
+  `family.css` + `agenda.css`.
+- **Vistas** (pestañas): Paciente, Personas conocidas, Por aclarar, Cuidados, Memoria, Ejercicios y Agenda.
   - Paciente: ficha propia (no se mezcla con familiares) y preparación de reconocimiento (5 fotos).
   - Personas conocidas: alta con consentimiento y 5 muestras; ficha y fotos visibles.
   - Por aclarar: identificación de desconocidos; nada se pronuncia hasta confirmarlo.
@@ -247,6 +247,10 @@ Escucha ambiental:
   - Memoria: cronología de eventos con filtros y **chat de voz** (`Web Speech API` para
     reconocimiento de voz y `speechSynthesis` para leer la respuesta), con conversación continua y
     «Empezar de nuevo».
+  - Ejercicios: ejercicios cognitivos creados desde recuerdos verificados y su resultado.
+  - Agenda (KAN-104): recordatorios del paciente y la familia sobre `/v1/calendar-events`
+    (título, categoría, hora, duración, aviso previo y destinatario) con alta, cambio de hora,
+    activar/pausar y borrado.
 - **Versionado de caché**: al cambiar el frontend se sube la versión de `app.js?v=NN` y del `CACHE`
   del service worker para forzar la actualización.
 - **TWA**: el APK de Faro Familia envuelve el portal a pantalla completa; el backend sirve el
