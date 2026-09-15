@@ -1,0 +1,415 @@
+{
+  "version": 1,
+  "actualizado": "2026-09-15",
+  "fuente": "Jira KAN — tareas abiertas al 2026-09-15",
+  "objetivo": "Repartir las tareas pendientes (estado «Por hacer») del proyecto Faro da Memoria entre los asistentes de IA disponibles (Amazon Quick, GitHub Copilot Pro, DeepSeek/opencode y Gemini Pro) y Leo (titular), con un brief listo para ejecutar cada una.",
+  "flujo": [
+    "Una tarea de Jira = una rama KAN-XX-descripcion. Nunca se empuja directo a main.",
+    "Cada cambio pasa por Pull Request a main; el merge se hace cuando los tests del repo pasan al 100 %.",
+    "Registrar en Jira el resultado: comentario, etiqueta del agente y estado correspondiente.",
+    "No subir secretos ni builds a Git (.env, *.keystore, __pycache__/, app/build/, *.db).",
+    "Leer CONTEXT.md (y android/CONTEXT.md si aplica) antes de tocar un repositorio."
+  ],
+  "herramientas": [
+    {
+      "id": "deepseek-opencode",
+      "nombre": "DeepSeek (opencode)",
+      "fortaleza": "Backend y portal de aura-care (FastAPI + web), incidencias de código, tests locales, automatización de Jira y despliegue.",
+      "acceso": "Repos locales aura-care y android; token de Jira; puede ejecutar pytest y desplegar en la EC2."
+    },
+    {
+      "id": "copilot-pro",
+      "nombre": "GitHub Copilot Pro",
+      "fortaleza": "Cambios de código en los repos de GitHub (app Android de las gafas, Faro Móvil y web) con ramas y PR.",
+      "acceso": "Cuenta GitHub farodamemoria y repos aura-care y android; siempre vía rama + PR, nunca push directo a main."
+    },
+    {
+      "id": "gemini-pro",
+      "nombre": "Gemini Pro",
+      "fortaleza": "Documentos largos, investigación, guiones de demo, contenidos de negocio y revisión del dossier.",
+      "acceso": "CONTEXT.md, README y el dossier de C:\\ia; salida en docs/ del repo o Google Docs."
+    },
+    {
+      "id": "amazon-quick",
+      "nombre": "Amazon Quick",
+      "fortaleza": "Investigación de producto y hardware, ecosistema AWS y Alexa, comparativas con enlaces, precios y disponibilidad.",
+      "acceso": "Cuenta AWS del proyecto (Rekognition, Lambda) y navegación web."
+    },
+    {
+      "id": "leo",
+      "nombre": "Leo (humano)",
+      "fortaleza": "Cuentas (OpenAI, Meta, Google Play, Apple), hardware real, pruebas con personas, reuniones institucionales y validaciones legales.",
+      "acceso": "Cuentas y dispositivos del proyecto; aprueba y valida el trabajo de los agentes."
+    }
+  ],
+  "tareas": [
+    {
+      "clave": "KAN-40",
+      "titulo": "Memoria visual de objetos y ayuda para encontrarlos",
+      "prioridad": "Highest",
+      "estado": "Por hacer",
+      "creada": "2026-08-26",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: registrar objetos vistos por las gafas (tipo recuerdo de objeto) y permitir buscarlos desde el chat familiar. Reutilizar memories y /v1/family/ask. DoD: endpoints con tests y respuesta del chat con el último lugar donde se vio el objeto. Flujo CONTEXT.md: rama KAN-40-memoria-objetos + PR."
+    },
+    {
+      "clave": "KAN-50",
+      "titulo": "Gestión de medicación: pautas, recordatorios, confirmación y escalado",
+      "prioridad": "Highest",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: pautas de medicación por paciente (pauta, dosis, horarios), recordatorio y confirmación; si no hay confirmación, escalar a la red de cuidados con los avisos existentes (plantilla faro_emergency_alert). DoD: endpoints + tests; aviso registrado y deduplicado."
+    },
+    {
+      "clave": "KAN-51",
+      "titulo": "Zonas seguras y geocercas con seguimiento y escalado por desorientación",
+      "prioridad": "Highest",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: zonas seguras por paciente sobre location-sessions; detectar salida de zona y escalar con aviso preventivo. DoD: cálculo dentro/fuera con tests y aviso con mensaje prudente (sin diagnósticos)."
+    },
+    {
+      "clave": "KAN-52",
+      "titulo": "Detectar que el paciente no lleva las gafas y activar recordatorio o aviso",
+      "prioridad": "Highest",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "copilot-pro",
+      "brief": "En el repo android (app de las gafas, Meta DAT SDK): detectar falta de uso (sin conexión o sin eventos) y lanzar recordatorio al paciente; si se prolonga, aviso a la familia vía API de aura-care. DoD: PR con la lógica y nota de prueba manual con las gafas."
+    },
+    {
+      "clave": "KAN-77",
+      "titulo": "Ejercicios cognitivos personalizados basados en recuerdos verificados",
+      "prioridad": "Highest",
+      "estado": "Por hacer",
+      "creada": "2026-09-08",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: generar ejercicios cognitivos a partir de memorias verificadas y añadir su sección en Faro Familia (portal web) con resultados. DoD: endpoints + UI + tests; sin diagnósticos ni valoraciones clínicas."
+    },
+    {
+      "clave": "KAN-85",
+      "titulo": "Demo del 1 de octubre: guion y casos de uso, practicar y verificar",
+      "prioridad": "Highest",
+      "estado": "Por hacer",
+      "creada": "2026-09-10",
+      "responsable": "gemini-pro",
+      "brief": "Crear el guion de la demo del 1 de octubre y los casos de uso a mostrar, con un guion de práctica para Leo y una checklist de «todo funciona el día de la demo». Entregable: docs/kan85-guion-demo.md en aura-care (rama KAN-85-guion-demo + PR) o Google Doc equivalente."
+    },
+    {
+      "clave": "KAN-93",
+      "titulo": "Documento técnico de cómo están fabricadas las dos aplicaciones y las webs",
+      "prioridad": "Highest",
+      "estado": "Por hacer",
+      "creada": "2026-09-14",
+      "responsable": "gemini-pro",
+      "brief": "Redactar el documento técnico (stack, repos, módulos, despliegue, flujos y diagramas) de la app de gafas, Faro Móvil y las webs. Fuentes: CONTEXT.md, README y código. Entregable: docs/kan93-documento-tecnico.md."
+    },
+    {
+      "clave": "KAN-61",
+      "titulo": "Las fotos almacenadas (paciente, conocidos, familiares…) deben verse en la ficha (las 5)",
+      "prioridad": "High",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "copilot-pro",
+      "brief": "En aura-care (backend + portal): mostrar en la ficha las 5 fotos almacenadas de cada persona (perfil y muestras faciales). DoD: endpoints/UI + tests; sin exponer imágenes sin token."
+    },
+    {
+      "clave": "KAN-92",
+      "titulo": "Calendario con recordatorios (medicación, rutinas, citas) en Faro Familia y por voz en las gafas",
+      "prioridad": "High",
+      "estado": "Por hacer",
+      "creada": "2026-09-14",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: CRUD de calendario y recordatorios en el portal; consulta por voz desde las gafas y desde el chat familiar. DoD: endpoints + UI + tests; zona horaria Europe/Madrid."
+    },
+    {
+      "clave": "KAN-95",
+      "titulo": "Incidencia: botones de descarga de APK mal posicionados y solapados en la web",
+      "prioridad": "High",
+      "estado": "Por hacer",
+      "creada": "2026-09-15",
+      "responsable": "copilot-pro",
+      "brief": "En aura-care/web: revisar la corrección del commit 18ca56b y terminar de colocar los botones de descarga sin solapes en móvil y escritorio; subir app.js?v=NN y la caché del service worker. DoD: capturas antes/después y suite del repo en verde."
+    },
+    {
+      "clave": "KAN-97",
+      "titulo": "La IA crea agendas para el paciente y familiares a partir de la memoria y el calendario",
+      "prioridad": "High",
+      "estado": "Por hacer",
+      "creada": "2026-09-15",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: que el chat familiar use la memoria conversacional y el calendario (KAN-92) para crear y recordar agendas de paciente y familiares. Depende de KAN-92. DoD: función de agenda con tests; sin inventar datos ni ofrecer funciones inexistentes."
+    },
+    {
+      "clave": "KAN-6",
+      "titulo": "Crear API key para la conexión de OpenAI",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-08-20",
+      "responsable": "leo",
+      "brief": "Crear la API key de OpenAI con la cuenta titular y guardarla como secreto de Faro (AWS Secrets Manager o /etc/aura-backend/openai.env en la EC2); no subirla nunca a Git. DoD: servicio con la clave configurada y prueba de conexión correcta."
+    },
+    {
+      "clave": "KAN-41",
+      "titulo": "Mejorar precisión y actualización progresiva de la ubicación en alertas",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-08-26",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: mejorar la ubicación de las alertas (sesión activa + última conocida + marca de antigüedad y precisión). DoD: tests del cálculo y enlace de mapa en los avisos."
+    },
+    {
+      "clave": "KAN-67",
+      "titulo": "Sugerir identidad probable de personas por identificar usando el contexto de conversación",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-07",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: proponer identidad probable de una persona por aclarar combinando el nombre mencionado en la conversación con los candidatos de Rekognition (faro-faces). DoD: endpoint/consulta con tests; nunca afirmar una identidad dudosa (inferencia ≠ certeza)."
+    },
+    {
+      "clave": "KAN-68",
+      "titulo": "Incidencia Faro Móvil: la cámara se reabre después de cada análisis",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-07",
+      "responsable": "copilot-pro",
+      "brief": "En la app Faro Móvil: corregir el ciclo de vida de la cámara para que no se reabra tras cada análisis (cerrar/reabrir solo con acción del usuario). DoD: PR con la corrección y pasos de prueba manual."
+    },
+    {
+      "clave": "KAN-69",
+      "titulo": "Crear un proceso de Q&A y feedback de pilotos por aplicación y versión",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-07",
+      "responsable": "gemini-pro",
+      "brief": "Diseñar el proceso de pruebas y feedback de pilotos por aplicación y versión: plantillas de encuesta, criterios de aceptación por caso y registro de resultados. Entregable: docs/kan69-proceso-qa-pilotos.md + plantillas."
+    },
+    {
+      "clave": "KAN-70",
+      "titulo": "Gestionar alianzas y reuniones institucionales y clínicas de Faro",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-07",
+      "responsable": "leo",
+      "brief": "Contactar y agendar reuniones con la Xunta, clúster de salud y centros interesados; registrar acuerdos y próximos pasos. DoD: agenda de reuniones y resumen de cada una."
+    },
+    {
+      "clave": "KAN-75",
+      "titulo": "Visualización remota segura de gafas, móvil y cámaras desde Faro Familia",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-07",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: visualización remota con token de corta vida, consentimiento y auditoría (imagen de gafas/móvil y cámaras autorizadas) desde el portal. DoD: endpoints + UI + tests con registro de auditoría y revocación."
+    },
+    {
+      "clave": "KAN-78",
+      "titulo": "Persistir Personas por aclarar y sus imágenes de forma segura",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-08",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: persistir las Personas por aclarar y sus imágenes con retención y borrado seguro; acceso solo con token del círculo. DoD: endpoints con tests y revisión de privacidad (minimización)."
+    },
+    {
+      "clave": "KAN-79",
+      "titulo": "Prever fugas de casa: detectar puerta y verificar con cámaras si el paciente puede perderse",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-09",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: motor que ante un audio de puerta verifique con las cámaras conectadas si el paciente puede estar saliendo (aunque no lleve las gafas) y avise a la red de cuidados. DoD: motor con tests incluidos falsos positivos y mensajes prudentes."
+    },
+    {
+      "clave": "KAN-89",
+      "titulo": "Publicar la app de Meta en Live + verificación de empresa (WhatsApp en producción)",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-11",
+      "responsable": "leo",
+      "brief": "Completar en el panel de Meta la verificación de empresa y pasar la app a Live para que WhatsApp entregue a números reales (plantilla faro_emergency_alert). DoD: app en Live y prueba de aviso recibida en un número real."
+    },
+    {
+      "clave": "KAN-91",
+      "titulo": "Realizar una prueba integral con personas",
+      "prioridad": "Medium",
+      "estado": "Por hacer",
+      "creada": "2026-09-13",
+      "responsable": "leo",
+      "brief": "Coordinar la prueba con personas (20-30 participantes, 3 meses): consentimientos RGPD, calendario y registro de incidencias; apoyarse en el guion de KAN-85 y en el proceso de KAN-69. DoD: informe inicial de la prueba."
+    },
+    {
+      "clave": "KAN-37",
+      "titulo": "Panel longitudinal de crisis, riesgos y evolución del paciente",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-26",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: panel longitudinal con agregados por día/semana de eventos y avisos (crisis, riesgos y evolución). DoD: endpoints + sección web + tests."
+    },
+    {
+      "clave": "KAN-43",
+      "titulo": "Sustituir logos genéricos por la identidad visual de Faro da Memoria",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-26",
+      "responsable": "copilot-pro",
+      "brief": "En aura-care/web: sustituir los logos genéricos por la identidad visual de Faro (assets del dossier de C:\\ia; pedir a Leo si falta algún formato). DoD: PR con capturas de las pantallas afectadas."
+    },
+    {
+      "clave": "KAN-45",
+      "titulo": "Distribuir Faro Móvil mediante Google Play en pruebas internas",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-28",
+      "responsable": "leo",
+      "brief": "Publicar Faro Móvil en el canal de pruebas internas de Google Play: cuenta de organización, subir el AAB (lo prepara Copilot Pro) y lista de testers. DoD: enlace de pruebas internas funcionando."
+    },
+    {
+      "clave": "KAN-53",
+      "titulo": "Integrar cámaras locales RTSP/ONVIF para caídas, peligros y objetos perdidos",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: adaptador para cámaras locales RTSP/ONVIF (Home Assistant/Frigate), con la elección de hardware de KAN-82; detección de caídas, peligros y objetos. DoD: adaptador con tests simulados y aviso a la red de cuidados."
+    },
+    {
+      "clave": "KAN-54",
+      "titulo": "Integrar altavoz inteligente como canal de respaldo cuando no se usan las gafas",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "amazon-quick",
+      "brief": "Diseñar la integración con altavoz inteligente (Alexa) como canal de respaldo: skill, rutinas, avisos y límites. Entregable: plan de integración con pasos de configuración; la parte de API la implementa DeepSeek después."
+    },
+    {
+      "clave": "KAN-55",
+      "titulo": "Estudio de hardware asistencial: ergonomía, térmica, graduación e indicador de grabación",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "amazon-quick",
+      "brief": "Estudio de hardware: ergonomía y peso <15 g, gestión térmica, graduación (clip-on/insertos RX) e indicador LED de grabación obligatorio. Entregable: informe con opciones, costes y recomendación."
+    },
+    {
+      "clave": "KAN-56",
+      "titulo": "Mapa de competencia, estado del arte y evidencia de innovación",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "gemini-pro",
+      "brief": "Mapa de competencia (CrossSense/Wispy, CareYaya, etc.), estado del arte y evidencia de innovación con fuentes verificables. Entregable: docs/kan56-competencia.md listo para la candidatura a la Xunta."
+    },
+    {
+      "clave": "KAN-59",
+      "titulo": "Definir kits de producto, licencias, costes y modelo comercial",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-08-31",
+      "responsable": "gemini-pro",
+      "brief": "Definir los 3 kits (Básico, Intermedio, Avanzado), licencias, costes y modelo comercial con las tarifas 49/79/99 € y el punto de equilibrio (~351 círculos). Entregable: doc de negocio con hoja de cálculo resumen."
+    },
+    {
+      "clave": "KAN-63",
+      "titulo": "Disponer de las dos apps principales en Play Store",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-09-01",
+      "responsable": "leo",
+      "brief": "Publicar las dos apps principales en Play Store: cuenta de organización, fichas, política de privacidad y revisión (los builds los preparan Copilot Pro/DeepSeek). DoD: apps publicadas o en revisión con enlace."
+    },
+    {
+      "clave": "KAN-72",
+      "titulo": "Autocompletar y validar país, provincia, localidad y dirección en las fichas",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-09-07",
+      "responsable": "copilot-pro",
+      "brief": "En aura-care (portal): autocompletar y validar país, provincia, localidad y dirección con catálogo local, sin servicios de pago. DoD: validación con tests y sin romper fichas existentes."
+    },
+    {
+      "clave": "KAN-73",
+      "titulo": "Protocolo para pedir ayuda a terceros y contactar con el familiar prioritario",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-09-07",
+      "responsable": "deepseek-opencode",
+      "brief": "En aura-care: protocolo de ayuda con orden de la red de cuidados y reglas de escalado (contacto prioritario primero, después el resto). DoD: lógica con tests y aviso al contacto prioritario."
+    },
+    {
+      "clave": "KAN-82",
+      "titulo": "Recomendar cámara, Home Assistant y pulsera de ubicación con SDK abierto para vincular a la IA",
+      "prioridad": "Low",
+      "estado": "Por hacer",
+      "creada": "2026-09-09",
+      "responsable": "amazon-quick",
+      "brief": "Investigar y recomendar cámara (Reolink/Hikvision), Home Assistant y pulsera BLE de ubicación con SDK abierto y compatibles con Faro. Entregable: comparativa con enlaces, precios, SDK y requisitos de integración."
+    },
+    {
+      "clave": "KAN-26",
+      "titulo": "Mejorar front de conexión con las gafas: identidad corporativa y UX/UI",
+      "prioridad": "Lowest",
+      "estado": "Por hacer",
+      "creada": "2026-08-26",
+      "responsable": "copilot-pro",
+      "brief": "En aura-care/web: mejorar el front de conexión con las gafas con la identidad corporativa y UX/UI clara para personas mayores. DoD: PR con capturas y sin romper el flujo de emparejamiento."
+    },
+    {
+      "clave": "KAN-34",
+      "titulo": "Agrupar la línea de tiempo de eventos por día y hora",
+      "prioridad": "Lowest",
+      "estado": "Por hacer",
+      "creada": "2026-08-26",
+      "responsable": "copilot-pro",
+      "brief": "En aura-care/web: agrupar la línea de tiempo de eventos por día y hora con encabezados claros. DoD: UI + tests y caché del service worker actualizada."
+    },
+    {
+      "clave": "KAN-38",
+      "titulo": "Identidad de marca blanca de Faro da Memoria en voz, interfaz y errores",
+      "prioridad": "Lowest",
+      "estado": "Por hacer",
+      "creada": "2026-08-26",
+      "responsable": "copilot-pro",
+      "brief": "En aura-care y apps: aplicar la identidad de marca blanca en voz, interfaz y mensajes de error (tono cercano, nombres correctos, sin tecnicismos). Coordinar con la guía de marca; DoD: PR revisable + tests de textos."
+    },
+    {
+      "clave": "KAN-64",
+      "titulo": "Crear la versión para Apple",
+      "prioridad": "Lowest",
+      "estado": "Por hacer",
+      "creada": "2026-09-01",
+      "responsable": "leo",
+      "brief": "Decidir y preparar la versión para Apple (requiere Mac y cuenta Apple Developer; evaluar alternativa PWA). DoD: decisión documentada y plan con costes."
+    },
+    {
+      "clave": "KAN-65",
+      "titulo": "Revisar la configuración en Meta y ver si hay que complementar algo más",
+      "prioridad": "Lowest",
+      "estado": "Por hacer",
+      "creada": "2026-09-01",
+      "responsable": "leo",
+      "brief": "Revisar la app de Meta (permisos, webhooks, suscripciones, DAT SDK) y completar lo que falte; apoyarse en la checklist de KAN-89. DoD: checklist completada en el panel de Meta."
+    }
+  ],
+  "no_delegadas": [
+    {"clave": "KAN-30", "estado": "En curso", "motivo": "En curso: no reasignar; terminar y pasar a revisión."},
+    {"clave": "KAN-36", "estado": "En curso", "motivo": "En curso: no reasignar; terminar y pasar a revisión."},
+    {"clave": "KAN-60", "estado": "En curso", "motivo": "En curso: no reasignar; terminar y pasar a revisión."},
+    {"clave": "KAN-66", "estado": "En curso", "motivo": "En curso: no reasignar; terminar y pasar a revisión."},
+    {"clave": "KAN-31", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-33", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-35", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-39", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-44", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-62", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-81", "estado": "En revisión", "motivo": "Es esta misma tarea de gestión del reparto."},
+    {"clave": "KAN-84", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-86", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-87", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."},
+    {"clave": "KAN-96", "estado": "En revisión", "motivo": "En revisión: pendiente de validación del PO."}
+  ]
+}
