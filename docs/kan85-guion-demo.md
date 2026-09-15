@@ -131,9 +131,9 @@ Cada caso incluye **Objetivo**, **Preparación**, **Pasos**, **Resultado esperad
 | Salud `/health` | `status: ok` · proveedor WhatsApp (Meta) activo |
 | Versión `/v1/version` | `family_conversation`, `family_ai`, `location_tracking`, `family_alerts`, `care_network_management`, `events` |
 | Instalación `/.well-known/assetlinks.json` | 200 (TWA a pantalla completa) |
-| Descarga `/download/faro.apk` | 200 · 2,6 MB |
-| Descarga `/download/camera-access.apk` | 200 · 132,0 MB |
-| Descarga `/download/faro-movil.apk` | 200 · 16,3 MB |
+| Descarga `https://github.com/farodamemoria/faro-apks/releases/download/apk-2026-09-15/com.faro.familia-base.apk` | 200 · 2,6 MB |
+| Descarga `https://github.com/farodamemoria/faro-apks/releases/download/voz-2026-09-15/camera-access-voz.apk` | 200 · 132,0 MB |
+| Descarga `https://github.com/farodamemoria/faro-apks/releases/download/apk-2026-09-15/com.faro.memoria.mobile-base.apk` | 200 · 16,3 MB |
 | Suite del repositorio | 45/45 PASS |
 
 Reproducible con `python scripts/kan85_verificar_demo.py` (no necesita token).

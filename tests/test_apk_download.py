@@ -26,9 +26,9 @@ def client() -> TestClient:
     return TestClient(main.app)
 
 
-def test_download_button_points_to_self_hosted_apk() -> None:
+def test_download_button_points_to_github_apks() -> None:
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    assert "/download/faro.apk" in html
+    assert "github.com/farodamemoria/faro-apks/releases/download" in html
     assert "drive.usercontent.google.com" not in html
     assert "drive.google.com" not in html
 

@@ -1,4 +1,4 @@
-const CACHE='faro-familia-v30';
+const CACHE='faro-familia-v31';
 const ASSETS=['/','/assets/app.css?v=2','/assets/events.css?v=1','/assets/people.css?v=1','/assets/care.css?v=1','/assets/patient.css?v=1','/assets/family.css?v=3','/assets/agenda.css?v=1','/assets/app.js?v=24','/assets/manifest.webmanifest'];
 
 self.addEventListener('install',event=>{
