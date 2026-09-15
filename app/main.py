@@ -2675,19 +2675,81 @@ FAMILY_ALERT_TOOL = {
 }
 
 
+FAMILY_CALENDAR_TOOL = {
+    "type": "function",
+    "name": "crear_recordatorio",
+    "description": (
+        "Crea un recordatorio en la agenda de Faro, para el paciente o para la familia. Úsala "
+        "cuando el familiar pida programar o recordar algo (una pastilla, una cita, una rutina). "
+        "Indica el título y la fecha y hora de inicio en ISO 8601; si el familiar no da la hora, "
+        "pídesela antes de crear el recordatorio."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "titulo": {"type": "string", "description": "Qué hay que recordar, en una frase breve."},
+            "fecha_hora": {"type": "string", "description": "Inicio en ISO 8601, p. ej. 2026-09-20T18:30:00+02:00."},
+            "categoria": {
+                "type": "string",
+                "enum": ["medication", "routine", "appointment", "other"],
+                "description": "Tipo de recordatorio.",
+            },
+            "avisar_minutos_antes": {"type": "integer", "description": "Minutos de antelación del aviso (0-1440)."},
+            "para_paciente": {"type": "boolean", "description": "true si es para el paciente; false si es para la familia."},
+            "notas": {"type": "string", "description": "Detalle opcional."},
+        },
+        "required": ["titulo", "fecha_hora"],
+    },
+}
+
+CALENDAR_CATEGORIES = {"medication", "routine", "appointment", "other"}
+
+
 def execute_family_tool(name: str, arguments: str) -> dict:
-    if name != "registrar_aviso":
-        return {"status": "error", "detail": "unknown tool"}
     try:
         args = json.loads(arguments or "{}")
     except json.JSONDecodeError:
         return {"status": "error", "detail": "invalid arguments"}
-    keywords = args.get("palabras_clave") or []
-    description = args.get("descripcion") or ""
-    if not isinstance(keywords, list) or not description:
-        return {"status": "error", "detail": "missing description or keywords"}
-    rule = repository.add_family_alert_rule([str(keyword) for keyword in keywords], str(description))
-    return {"status": "ok", "rule_id": rule["id"], "description": rule["description"], "keywords": rule["keywords"]}
+    if name == "registrar_aviso":
+        keywords = args.get("palabras_clave") or []
+        description = args.get("descripcion") or ""
+        if not isinstance(keywords, list) or not description:
+            return {"status": "error", "detail": "missing description or keywords"}
+        rule = repository.add_family_alert_rule([str(keyword) for keyword in keywords], str(description))
+        return {"status": "ok", "rule_id": rule["id"], "description": rule["description"], "keywords": rule["keywords"]}
+    if name == "crear_recordatorio":
+        title = str(args.get("titulo") or "").strip()
+        raw_start = args.get("fecha_hora")
+        if not title or not raw_start:
+            return {"status": "error", "detail": "missing title or start date"}
+        try:
+            start_at = datetime.fromisoformat(str(raw_start))
+        except ValueError:
+            return {"status": "error", "detail": "invalid start date"}
+        if start_at.tzinfo is None:
+            start_at = start_at.replace(tzinfo=family_zone())
+        category = str(args.get("categoria") or "other")
+        if category not in CALENDAR_CATEGORIES:
+            category = "other"
+        try:
+            reminder = int(args.get("avisar_minutos_antes", 15))
+        except (TypeError, ValueError):
+            reminder = 15
+        notes = args.get("notas")
+        event = CalendarEvent(
+            id=uuid4(), created_at=now(), title=title, category=category, start_at=start_at,
+            duration_minutes=30, reminder_minutes_before=max(0, min(1440, reminder)),
+            notes=(str(notes).strip() or None) if notes else None,
+            for_patient=bool(args.get("para_paciente", True)), enabled=True,
+        )
+        repository.calendar_events[event.id] = event
+        repository.save_calendar_events()
+        return {
+            "status": "ok", "event_id": str(event.id), "title": event.title,
+            "start_at": event.start_at.isoformat(), "category": event.category,
+            "for_patient": event.for_patient,
+        }
+    return {"status": "error", "detail": "unknown tool"}
 
 
 def openai_family_answer(
@@ -2713,6 +2775,16 @@ def openai_family_answer(
         object_lines.append(f"- {memory.object_name}{where} ({moment})")
     if object_lines:
         context += "\n\nObjetos recordados recientemente:\n" + "\n".join(object_lines)
+    agenda_items: list[str] = []
+    reference = now()
+    for calendar_event in sorted(repository.calendar_events.values(), key=lambda item: item.start_at):
+        if not calendar_event.enabled or calendar_event.start_at < reference - timedelta(days=1):
+            continue
+        momento = calendar_event.start_at.astimezone(family_zone()).strftime("%d/%m %H:%M")
+        destino = "paciente" if calendar_event.for_patient else "familia"
+        agenda_items.append(f"- {momento} · {calendar_event.title} ({calendar_event.category}, {destino})")
+    if agenda_items:
+        context += "\n\nAgenda próxima:\n" + "\n".join(agenda_items[:15])
     transcript = "\n".join(
         f"{'Familiar' if turn.get('role') == 'user' else 'Faro'}: {turn.get('content', '')}"
         for turn in (history or [])
@@ -2730,20 +2802,28 @@ def openai_family_answer(
         "Puedes ser cercano y natural, pero NO debes realizar tareas ajenas a ese ámbito (chistes, "
         "conocimiento general, redacciones, traducciones, cálculos, etc.); si te lo piden, declina "
         "con amabilidad y ofrece ayuda sobre el paciente.\n\n"
-        "Tus dos capacidades reales son:\n"
+        "Tus capacidades reales son:\n"
         "1) Consultar y explicar el registro de eventos del paciente (abajo tienes los eventos "
         f"del día consultado: {day_label}).\n"
         f"2) Registrar avisos automáticos por WhatsApp a la red de cuidados ({contacts_label}) "
-        "ante palabras clave concretas, usando la herramienta registrar_aviso.\n\n"
+        "ante palabras clave concretas, usando la herramienta registrar_aviso.\n"
+        "3) Programar recordatorios en la agenda de Faro (del paciente o de la familia) con la "
+        "herramienta crear_recordatorio, usando la fecha y hora que indique el familiar.\n\n"
         "Reglas que debes cumplir siempre:\n"
         "- No repitas el resumen del día salvo que te pregunten por el día o por los eventos. Si "
         "el mensaje es un saludo, una despedida, un agradecimiento o charla, responde con "
         "naturalidad y brevedad SIN enumerar eventos ni repetir resúmenes anteriores.\n"
         "- Si el familiar se despide, agradece o da por terminada la conversación, responde "
         "brevemente y añade la etiqueta [FIN] al final (y solo en ese caso).\n"
-        "- No inventes funciones: NO existen informes periódicos o diarios, resúmenes programados, "
-        "recordatorios, horarios, tareas recurrentes ni envíos a demanda. Si te lo piden, dilo con "
-        "naturalidad y ofrece solo lo que sí puedes hacer.\n"
+        "- No inventes funciones: NO existen informes periódicos o diarios, resúmenes programados "
+        "ni envíos a demanda. Si te lo piden, dilo con naturalidad y ofrece solo lo que sí puedes "
+        "hacer.\n"
+        "- Si el familiar pide programar o recordar algo (una pastilla, una cita, una rutina) para "
+        "el paciente o para la familia, llama a crear_recordatorio con el título y la fecha y hora "
+        "en ISO 8601; si falta la hora, pídesela antes de crearlo. Confírmale después que queda en "
+        "la agenda.\n"
+        "- Si preguntan por la agenda o los próximos recordatorios, responde con «Agenda próxima»; "
+        "si no aparece nada, dilo con claridad.\n"
         "- No inventes datos del paciente: usa solo los eventos y datos proporcionados; si algo no "
         "aparece, dilo con claridad.\n"
         "- Si preguntan por un objeto (llaves, mando, gafas...), usa «Objetos recordados "
@@ -2767,7 +2847,7 @@ def openai_family_answer(
             "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
             "instructions": instructions,
             "input": input_items,
-            "tools": [FAMILY_ALERT_TOOL],
+            "tools": [FAMILY_ALERT_TOOL, FAMILY_CALENDAR_TOOL],
             "temperature": 0.2,
             "max_output_tokens": 500,
         }).encode("utf-8")

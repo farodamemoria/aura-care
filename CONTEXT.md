@@ -228,7 +228,7 @@ curl -s -X POST https://d2n7ih9kfxbzvd.cloudfront.net/v1/family/ask \
 ## 8. Convenciones y notas importantes
 
 - **Idioma:** gallego para el paciente (gafas); español para el portal/familia (configurable).
-- **La IA del chat debe:** responder preguntas sobre eventos, registrar avisos por WhatsApp, mantenerse en el ámbito del paciente, **no inventar funciones ni datos**, no entrar en bucle, y **no ofrecer funciones que no existen** (informes, horarios, recordatorios…).
+- **La IA del chat debe:** responder preguntas sobre eventos, registrar avisos por WhatsApp, **crear recordatorios en la agenda** (`crear_recordatorio`), mantenerse en el ámbito del paciente, **no inventar funciones ni datos**, no entrar en bucle, y **no ofrecer funciones que no existen** (informes periódicos, envíos a demanda…).
 - **Entrega de avisos:** por **plantilla aprobada** (no dependen de la ventana de 24 h).
 - **Meta Development vs Live:** en Development, WhatsApp solo entrega a números de prueba; para producción hay que pasar a **Live** + verificación de empresa (**KAN-89**).
 - **Despliegue:** la EC2 sirve el portal; CloudFront delante. Tras cambios de frontend, subir la versión de `app.js?v=NN` y del `CACHE` del service worker para forzar la actualización.
