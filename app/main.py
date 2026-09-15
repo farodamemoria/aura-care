@@ -22,6 +22,7 @@ import sqlite3
 import math
 import calendar
 import threading
+import logging
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -3902,15 +3903,15 @@ def start_tick_scheduler(interval_seconds: int = 60) -> None:
             try:
                 run_medication_tick()
                 run_calendar_tick()
-            except Exception:  # noqa: BLE001 - el planificador no debe morir
-                continue
+            except Exception as error:  # noqa: BLE001 - el planificador no debe morir
+                logging.getLogger("aura.scheduler").warning("tick error: %s", error)
 
     threading.Thread(target=loop, daemon=True, name="aura-tick-scheduler").start()
 
 
 @app.on_event("startup")
 def _start_tick_scheduler() -> None:
-    if os.getenv("AURA_TICK_SCHEDULER", "0").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("AURA_TICK_SCHEDULER", "1").lower() in {"0", "false", "no", "off"}:
         return
     try:
         interval = int(os.getenv("AURA_TICK_INTERVAL_SECONDS", "60"))
