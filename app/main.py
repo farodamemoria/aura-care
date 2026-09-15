@@ -301,6 +301,7 @@ class CalendarReminder(BaseModel):
     category: str
     start_at: datetime
     message: str
+    for_patient: bool = True
 
 
 class CalendarTickResult(BaseModel):
@@ -3815,7 +3816,7 @@ def run_calendar_tick(reference: Optional[datetime] = None) -> CalendarTickResul
         message = calendar_reminder_message(event)
         reminders.append(CalendarReminder(
             event_id=event.id, title=event.title, category=event.category,
-            start_at=event.start_at, message=message,
+            start_at=event.start_at, message=message, for_patient=event.for_patient,
         ))
         repository.add_event(EventCreate(
             kind="routine", source="backend", severity="info",
