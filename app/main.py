@@ -6,7 +6,7 @@ import base64
 import binascii
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Annotated, Optional, Protocol, Union
@@ -122,6 +122,61 @@ def object_memory_matches(memory: ObjectMemory, query: str) -> bool:
     if name_normalized in query_normalized:
         return True
     return bool(memory_terms(name_normalized) & memory_terms(query_normalized))
+
+
+class MedicationPlanCreate(BaseModel):
+    medication: str = Field(min_length=1, max_length=120)
+    dose: Optional[str] = Field(default=None, max_length=120)
+    times: list[str] = Field(min_length=1, max_length=6)
+    notes: Optional[str] = Field(default=None, max_length=300)
+    enabled: bool = True
+
+
+class MedicationPlan(MedicationPlanCreate):
+    id: UUID
+    created_at: datetime
+
+
+class MedicationPlanUpdate(BaseModel):
+    medication: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    dose: Optional[str] = Field(default=None, max_length=120)
+    times: Optional[list[str]] = Field(default=None, min_length=1, max_length=6)
+    notes: Optional[str] = Field(default=None, max_length=300)
+    enabled: Optional[bool] = None
+
+
+class MedicationDose(BaseModel):
+    id: UUID
+    plan_id: UUID
+    medication: str
+    dose: Optional[str] = None
+    scheduled_at: datetime
+    status: str = Field(pattern="^(pending|taken|missed|escalated)$")
+    confirmed_at: Optional[datetime] = None
+    escalated_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class MedicationReminder(BaseModel):
+    dose_id: UUID
+    medication: str
+    dose: Optional[str] = None
+    scheduled_at: datetime
+    message: str
+
+
+class MedicationEscalation(BaseModel):
+    dose_id: UUID
+    medication: str
+    scheduled_at: datetime
+    message: str
+    family_alert_status: str
+
+
+class MedicationTickResult(BaseModel):
+    at: datetime
+    reminders: list[MedicationReminder]
+    escalations: list[MedicationEscalation]
 
 
 class FaceCandidate(BaseModel):
@@ -242,7 +297,7 @@ class OnboardingConfiguration(BaseModel):
 
 
 class EmergencyAlertCreate(BaseModel):
-    kind: str = Field(pattern="^(episode|lost|hazard)$")
+    kind: str = Field(pattern="^(episode|lost|hazard|medication)$")
     spoken_message: str = Field(min_length=1, max_length=500)
     explicit_help_request: bool
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
@@ -596,6 +651,8 @@ class InMemoryRepository:
                 self.people[person.id] = person
         self.memories: dict[UUID, Memory] = {}
         self.object_memories: dict[UUID, ObjectMemory] = {}
+        self.medication_plans: dict[UUID, MedicationPlan] = {}
+        self.medication_doses: dict[UUID, MedicationDose] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
         self.review_images: dict[UUID, bytes] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
@@ -636,6 +693,16 @@ class InMemoryRepository:
             description TEXT, confidence REAL, source TEXT,
             seen_at TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS medication_plans (
+            id TEXT PRIMARY KEY, medication TEXT NOT NULL, dose TEXT, times_json TEXT NOT NULL,
+            notes TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+        )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS medication_doses (
+            id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, medication TEXT NOT NULL, dose TEXT,
+            scheduled_at TEXT NOT NULL, status TEXT NOT NULL, confirmed_at TEXT,
+            escalated_at TEXT, created_at TEXT NOT NULL
+        )""")
+        self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_medication_doses ON medication_doses(plan_id, scheduled_at)")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
             id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
             content TEXT NOT NULL, created_at TEXT NOT NULL
@@ -663,6 +730,20 @@ class InMemoryRepository:
                 seen_at=row["seen_at"], created_at=row["created_at"],
             )
             self.object_memories[object_memory.id] = object_memory
+        for row in self.event_db.execute("SELECT * FROM medication_plans ORDER BY created_at ASC").fetchall():
+            plan = MedicationPlan(
+                id=row["id"], medication=row["medication"], dose=row["dose"],
+                times=json.loads(row["times_json"]), notes=row["notes"],
+                enabled=bool(row["enabled"]), created_at=row["created_at"],
+            )
+            self.medication_plans[plan.id] = plan
+        for row in self.event_db.execute("SELECT * FROM medication_doses ORDER BY scheduled_at ASC").fetchall():
+            dose = MedicationDose(
+                id=row["id"], plan_id=row["plan_id"], medication=row["medication"], dose=row["dose"],
+                scheduled_at=row["scheduled_at"], status=row["status"], confirmed_at=row["confirmed_at"],
+                escalated_at=row["escalated_at"], created_at=row["created_at"],
+            )
+            self.medication_doses[dose.id] = dose
         contacts_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='care_contacts'").fetchone()
         if contacts_row:
             for raw in json.loads(contacts_row[0]):
@@ -874,6 +955,37 @@ class InMemoryRepository:
                      memory.confidence, memory.source, memory.seen_at.isoformat(),
                      memory.created_at.isoformat())
                     for memory in self.object_memories.values()
+                ],
+            )
+            self.event_db.commit()
+
+    def save_medication_plans(self) -> None:
+        with self.lock:
+            self.event_db.execute("DELETE FROM medication_plans")
+            self.event_db.executemany(
+                "INSERT INTO medication_plans(id, medication, dose, times_json, notes, enabled, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (str(plan.id), plan.medication, plan.dose, json.dumps(plan.times),
+                     plan.notes, 1 if plan.enabled else 0, plan.created_at.isoformat())
+                    for plan in self.medication_plans.values()
+                ],
+            )
+            self.event_db.commit()
+
+    def save_medication_doses(self) -> None:
+        with self.lock:
+            self.event_db.execute("DELETE FROM medication_doses")
+            self.event_db.executemany(
+                "INSERT INTO medication_doses(id, plan_id, medication, dose, scheduled_at, status, confirmed_at, escalated_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (str(dose.id), str(dose.plan_id), dose.medication, dose.dose,
+                     dose.scheduled_at.isoformat(), dose.status,
+                     dose.confirmed_at.isoformat() if dose.confirmed_at else None,
+                     dose.escalated_at.isoformat() if dose.escalated_at else None,
+                     dose.created_at.isoformat())
+                    for dose in self.medication_doses.values()
                 ],
             )
             self.event_db.commit()
@@ -2722,6 +2834,205 @@ def last_object_memory(name: str, authorization: Optional[str] = Header(default=
     require_auth(authorization)
     matches = find_object_memories(name, limit=1)
     return matches[0] if matches else None
+
+
+MEDICATION_TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+MEDICATION_GRACE = timedelta(minutes=20)
+
+
+def parse_medication_time(value: str) -> tuple[int, int]:
+    text = value.strip()
+    if not MEDICATION_TIME_PATTERN.match(text):
+        raise HTTPException(status_code=422, detail=f"Horario inválido: {value!r} (usa HH:MM)")
+    hour, minute = text.split(":")
+    return int(hour), int(minute)
+
+
+def medication_schedule(plan: MedicationPlan, day: date) -> list[datetime]:
+    return [
+        datetime.combine(day, time(hour, minute), tzinfo=family_zone())
+        for hour, minute in (parse_medication_time(item) for item in plan.times)
+    ]
+
+
+def medication_reference(moment: Optional[datetime]) -> datetime:
+    if moment is None:
+        return now()
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=family_zone())
+    return moment
+
+
+def medication_reminder_message(plan: MedicationPlan) -> str:
+    dose = f" ({plan.dose})" if plan.dose else ""
+    return f"É a hora da túa medicación: {plan.medication}{dose}."
+
+
+def run_medication_tick(moment: Optional[datetime] = None) -> MedicationTickResult:
+    reference = medication_reference(moment)
+    day = reference.astimezone(family_zone()).date()
+    zone = family_zone()
+    reminders: list[MedicationReminder] = []
+    escalations: list[MedicationEscalation] = []
+    for plan in repository.medication_plans.values():
+        if not plan.enabled:
+            continue
+        for scheduled_at in medication_schedule(plan, day):
+            existing = next(
+                (
+                    dose for dose in repository.medication_doses.values()
+                    if dose.plan_id == plan.id and dose.scheduled_at == scheduled_at
+                ),
+                None,
+            )
+            if existing is not None or scheduled_at > reference:
+                continue
+            dose = MedicationDose(
+                id=uuid4(), plan_id=plan.id, medication=plan.medication, dose=plan.dose,
+                scheduled_at=scheduled_at, status="pending", created_at=now(),
+            )
+            repository.medication_doses[dose.id] = dose
+            reminders.append(MedicationReminder(
+                dose_id=dose.id, medication=plan.medication, dose=plan.dose,
+                scheduled_at=scheduled_at, message=medication_reminder_message(plan),
+            ))
+            repository.add_event(EventCreate(
+                kind="routine", source="backend", severity="info",
+                summary=(
+                    f"Recordatorio de medicación: {plan.medication} a las "
+                    f"{scheduled_at.astimezone(zone).strftime('%H:%M')}"
+                ),
+                metadata={"dose_id": str(dose.id), "plan_id": str(plan.id), "status": "pending"},
+            ))
+    for dose in list(repository.medication_doses.values()):
+        if dose.status != "pending" or reference - dose.scheduled_at < MEDICATION_GRACE:
+            continue
+        message = (
+            "No se ha confirmado la medicación de las "
+            f"{dose.scheduled_at.astimezone(zone).strftime('%H:%M')} ({dose.medication})."
+        )
+        contacts = enabled_alert_contacts()
+        if contacts:
+            deliveries, _ = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+                kind="medication", spoken_message=message, explicit_help_request=False,
+            ))
+            family_alert_status = (
+                "sent" if any(delivery.message_id for _, delivery in deliveries)
+                else "test_mode" if deliveries else "failed"
+            )
+        else:
+            family_alert_status = "no_contact"
+        repository.medication_doses[dose.id] = dose.model_copy(
+            update={"status": "escalated", "escalated_at": reference}
+        )
+        escalations.append(MedicationEscalation(
+            dose_id=dose.id, medication=dose.medication, scheduled_at=dose.scheduled_at,
+            message=message, family_alert_status=family_alert_status,
+        ))
+        repository.add_event(EventCreate(
+            kind="hazard", source="backend", severity="attention", summary=message,
+            metadata={"dose_id": str(dose.id), "hazard": "medication",
+                      "family_alert_status": family_alert_status},
+        ))
+    repository.save_medication_doses()
+    return MedicationTickResult(at=reference, reminders=reminders, escalations=escalations)
+
+
+@app.post("/v1/medication-plans", response_model=MedicationPlan, status_code=201)
+def create_medication_plan(
+    request: MedicationPlanCreate, authorization: Optional[str] = Header(default=None),
+) -> MedicationPlan:
+    require_auth(authorization)
+    for item in request.times:
+        parse_medication_time(item)
+    plan = MedicationPlan(id=uuid4(), created_at=now(), **request.model_dump())
+    repository.medication_plans[plan.id] = plan
+    repository.save_medication_plans()
+    return plan
+
+
+@app.get("/v1/medication-plans", response_model=list[MedicationPlan])
+def list_medication_plans(authorization: Optional[str] = Header(default=None)) -> list[MedicationPlan]:
+    require_auth(authorization)
+    return sorted(repository.medication_plans.values(), key=lambda plan: plan.created_at)
+
+
+@app.patch("/v1/medication-plans/{plan_id}", response_model=MedicationPlan)
+def update_medication_plan(
+    plan_id: UUID, request: MedicationPlanUpdate, authorization: Optional[str] = Header(default=None),
+) -> MedicationPlan:
+    require_auth(authorization)
+    plan = repository.medication_plans.get(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Medication plan not found")
+    changes = request.model_dump(exclude_unset=True)
+    if "times" in changes:
+        for item in changes["times"]:
+            parse_medication_time(item)
+    updated = plan.model_copy(update=changes)
+    repository.medication_plans[plan_id] = updated
+    repository.save_medication_plans()
+    return updated
+
+
+@app.delete("/v1/medication-plans/{plan_id}", status_code=204, response_class=Response)
+def delete_medication_plan(plan_id: UUID, authorization: Optional[str] = Header(default=None)) -> Response:
+    require_auth(authorization)
+    repository.medication_plans.pop(plan_id, None)
+    repository.save_medication_plans()
+    return Response(status_code=204)
+
+
+@app.get("/v1/medication-doses", response_model=list[MedicationDose])
+def list_medication_doses(
+    day: Optional[str] = None, authorization: Optional[str] = Header(default=None),
+) -> list[MedicationDose]:
+    require_auth(authorization)
+    zone = family_zone()
+    if day:
+        try:
+            target = datetime.strptime(day, "%Y-%m-%d").date()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="La fecha debe ser YYYY-MM-DD") from error
+    else:
+        target = now().astimezone(zone).date()
+    return sorted(
+        [
+            dose for dose in repository.medication_doses.values()
+            if dose.scheduled_at.astimezone(zone).date() == target
+        ],
+        key=lambda dose: dose.scheduled_at,
+    )
+
+
+@app.post("/v1/medication-doses/{dose_id}/confirm", response_model=MedicationDose)
+def confirm_medication_dose(dose_id: UUID, authorization: Optional[str] = Header(default=None)) -> MedicationDose:
+    require_auth(authorization)
+    dose = repository.medication_doses.get(dose_id)
+    if dose is None:
+        raise HTTPException(status_code=404, detail="Medication dose not found")
+    if dose.status == "taken":
+        return dose
+    confirmed = dose.model_copy(update={"status": "taken", "confirmed_at": now()})
+    repository.medication_doses[dose_id] = confirmed
+    repository.save_medication_doses()
+    repository.add_event(EventCreate(
+        kind="routine", source="glasses", severity="info",
+        summary=(
+            f"Medicación confirmada: {dose.medication} a las "
+            f"{dose.scheduled_at.astimezone(family_zone()).strftime('%H:%M')}"
+        ),
+        metadata={"dose_id": str(dose.id), "status": "taken"},
+    ))
+    return confirmed
+
+
+@app.post("/v1/medication-tick", response_model=MedicationTickResult)
+def medication_tick(
+    at: Optional[datetime] = None, authorization: Optional[str] = Header(default=None),
+) -> MedicationTickResult:
+    require_auth(authorization)
+    return run_medication_tick(at)
 
 
 @app.post("/v1/memories", response_model=Memory, status_code=201)

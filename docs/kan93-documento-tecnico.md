@@ -99,7 +99,16 @@ pregunta de comprobación y escala solo si hay petición de ayuda, persistencia 
 Se expone por `POST /v1/acoustic-events`, `POST /v1/acoustic-events/response`,
 `POST /v1/acoustic-events/tick` y `GET /v1/acoustic-episodes`.
 
-### 2.5 Inventario de endpoints
+### 2.5 Gestión de medicación
+
+Pautas por paciente (`medication_plans`: medicamento, dosis, horarios `HH:MM` y notas) y dosis
+materializadas (`medication_doses`) con estados `pending`, `taken`, `escalated` y `missed`.
+`POST /v1/medication-tick` genera las dosis vencidas del día y los recordatorios para las gafas;
+`POST /v1/medication-doses/{dose_id}/confirm` registra la toma. Si una dosis sigue pendiente
+pasada la tolerancia (20 minutos), se escala como aviso `medication` a la red de cuidados por
+WhatsApp y queda en la línea de tiempo. Horarios en la zona horaria familiar (`Europe/Madrid`).
+
+### 2.6 Inventario de endpoints
 
 Portal y estáticos:
 
@@ -160,6 +169,13 @@ Eventos, memoria y objetos:
 - `POST /v1/events`, `GET /v1/events`, `GET /v1/conversation-memory/search`,
   `POST /v1/memories`, `GET /v1/memories`, `POST /v1/object-memories`,
   `GET /v1/object-memories`, `GET /v1/object-memories/last`.
+
+Medicación:
+
+- `POST /v1/medication-plans`, `GET /v1/medication-plans`,
+  `PATCH /v1/medication-plans/{plan_id}`, `DELETE /v1/medication-plans/{plan_id}`,
+  `GET /v1/medication-doses`, `POST /v1/medication-doses/{dose_id}/confirm`,
+  `POST /v1/medication-tick`.
 
 Conversación familiar:
 
