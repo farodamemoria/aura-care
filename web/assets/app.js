@@ -148,6 +148,18 @@ function renderExercises(exercises, summary) {
 
 const agendaCategoryLabels = {medication: 'Medicación', routine: 'Rutina', appointment: 'Cita', other: 'Otra cosa'};
 const agendaCategoryIcons = {medication: '💊', routine: '↻', appointment: '📅', other: '•'};
+const agendaRecurrenceLabels = {daily: 'diario', weekly: 'semanal', monthly: 'mensual'};
+const agendaWeekdayLabels = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+function agendaRecurrenceText(event) {
+  if (!event.recurrence || event.recurrence === 'none') return 'una vez';
+  let text = agendaRecurrenceLabels[event.recurrence] || event.recurrence;
+  if (event.recurrence_interval > 1) text += ` (cada ${event.recurrence_interval})`;
+  if (event.recurrence === 'weekly' && (event.recurrence_weekdays || []).length) {
+    text += ` ${event.recurrence_weekdays.map(day => agendaWeekdayLabels[day] || day).join('')}`;
+  }
+  if (event.recurrence_until) text += ` hasta ${event.recurrence_until}`;
+  return text;
+}
 function toLocalInput(value) {
   const date = new Date(value), offset = date.getTimezoneOffset();
   return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 16);
@@ -165,7 +177,7 @@ function renderAgenda(events) {
       meta = document.createElement('small'), actions = document.createElement('div'), form = document.createElement('form');
     article.className = event.enabled ? 'agenda-item' : 'agenda-item agenda-item-disabled';
     title.textContent = `${agendaCategoryIcons[event.category] || '•'} ${event.title}`;
-    meta.textContent = `${agendaCategoryLabels[event.category] || event.category} · ${new Date(event.start_at).toLocaleString()} · aviso ${event.reminder_minutes_before} min antes · ${event.for_patient ? 'paciente' : 'familia'}`;
+    meta.textContent = `${agendaCategoryLabels[event.category] || event.category} · ${new Date(event.start_at).toLocaleString()} · ${agendaRecurrenceText(event)} · aviso ${event.reminder_minutes_before} min antes · ${event.for_patient ? 'paciente' : 'familia'}`;
     actions.className = 'agenda-actions';
     const toggle = document.createElement('button'); toggle.className = 'secondary';
     toggle.textContent = event.enabled ? 'Desactivar' : 'Activar';
@@ -503,6 +515,11 @@ if (agendaForm) {
       notes: data.get('notes') || null,
       for_patient: data.get('for_patient') === 'on',
       enabled: true,
+      recurrence: data.get('recurrence') || 'none',
+      recurrence_interval: Number(data.get('recurrence_interval') || 1),
+      recurrence_until: data.get('recurrence_until') || null,
+      recurrence_weekdays: (data.get('recurrence') === 'weekly')
+        ? data.getAll('recurrence_weekdays').map(Number) : null,
     };
     try { await api('/v1/calendar-events', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}); event.target.reset(); await load(); }
     catch (error) { notify(error); }
@@ -510,5 +527,13 @@ if (agendaForm) {
 }
 const agendaRefresh = document.querySelector('#agenda-refresh');
 if (agendaRefresh) agendaRefresh.addEventListener('click', () => load());
+
+const agendaRecurrence = document.querySelector('#agenda-recurrence');
+const agendaWeekdays = document.querySelector('#agenda-weekdays');
+if (agendaRecurrence && agendaWeekdays) {
+  agendaRecurrence.addEventListener('change', () => {
+    agendaWeekdays.hidden = agendaRecurrence.value !== 'weekly';
+  });
+}
 
 load();

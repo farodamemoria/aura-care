@@ -138,7 +138,7 @@ Componentes del producto:
 - Onboarding: `GET/PUT /v1/onboarding`
 
 ### Variables de entorno (servicio `aura-backend`)
-`AURA_EVENT_DB`, `AURA_DATA_FILE`, `AURA_REVIEW_MEDIA_DIR`, `AURA_REVIEW_SECRET`, `AURA_FACE_PROVIDER=rekognition`, `AURA_REKOGNITION_COLLECTION=faro-faces`, `AWS_REGION=us-east-2`, `AURA_LOCAL_TOKEN`, `AURA_WHATSAPP_PHONE_NUMBER_ID`, `AURA_WHATSAPP_TOKEN`, `AURA_WHATSAPP_TEMPLATE=faro_emergency_alert`, `AURA_WHATSAPP_TEMPLATE_LANG=es`, `AURA_WHATSAPP_PREFER_TEMPLATE=1`, `AURA_WHATSAPP_VERIFY_TOKEN=faro-whatsapp-verify`, `AURA_OPENAI_API_KEY` / `OPENAI_API_KEY`, `AURA_OPENAI_MODEL=gpt-4.1-mini`, `AURA_FAMILY_LANGUAGE=es`, `AURA_FAMILY_TIMEZONE=Europe/Madrid`.
+`AURA_EVENT_DB`, `AURA_DATA_FILE`, `AURA_REVIEW_MEDIA_DIR`, `AURA_REVIEW_SECRET`, `AURA_TICK_SCHEDULER`, `AURA_TICK_INTERVAL_SECONDS`, `AURA_FACE_PROVIDER=rekognition`, `AURA_REKOGNITION_COLLECTION=faro-faces`, `AWS_REGION=us-east-2`, `AURA_LOCAL_TOKEN`, `AURA_WHATSAPP_PHONE_NUMBER_ID`, `AURA_WHATSAPP_TOKEN`, `AURA_WHATSAPP_TEMPLATE=faro_emergency_alert`, `AURA_WHATSAPP_TEMPLATE_LANG=es`, `AURA_WHATSAPP_PREFER_TEMPLATE=1`, `AURA_WHATSAPP_VERIFY_TOKEN=faro-whatsapp-verify`, `AURA_OPENAI_API_KEY` / `OPENAI_API_KEY`, `AURA_OPENAI_MODEL=gpt-4.1-mini`, `AURA_FAMILY_LANGUAGE=es`, `AURA_FAMILY_TIMEZONE=Europe/Madrid`.
 
 ### Frontend (`web/`)
 `index.html`, `assets/app.js`, `assets/app.css`, `assets/family.css`, `assets/events.css`, `assets/people.css`, `assets/care.css`, `assets/patient.css`, `assets/sw.js` (service worker), `assets/manifest.webmanifest`.

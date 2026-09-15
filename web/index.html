@@ -128,6 +128,10 @@
           <label>Fecha y hora<input name="start_at" type="datetime-local" required></label>
           <label>Duración (minutos)<input name="duration_minutes" type="number" min="0" max="1440" value="30" inputmode="numeric"></label>
           <label>Aviso previo (minutos)<input name="reminder_minutes_before" type="number" min="0" max="1440" value="15" inputmode="numeric"></label>
+          <label>Repetición<select name="recurrence" id="agenda-recurrence"><option value="none" selected>Una vez</option><option value="daily">Todos los días</option><option value="weekly">Cada semana</option><option value="monthly">Cada mes</option></select></label>
+          <label>Cada (número de veces)<input name="recurrence_interval" type="number" min="1" max="366" value="1" inputmode="numeric"></label>
+          <label>Repetir hasta (opcional)<input name="recurrence_until" type="date"></label>
+          <fieldset id="agenda-weekdays" class="agenda-weekdays" hidden><legend>Días de la semana (repetición semanal)</legend><div class="weekday-options"><label><input type="checkbox" name="recurrence_weekdays" value="0">L</label><label><input type="checkbox" name="recurrence_weekdays" value="1">M</label><label><input type="checkbox" name="recurrence_weekdays" value="2">X</label><label><input type="checkbox" name="recurrence_weekdays" value="3">J</label><label><input type="checkbox" name="recurrence_weekdays" value="4">V</label><label><input type="checkbox" name="recurrence_weekdays" value="5">S</label><label><input type="checkbox" name="recurrence_weekdays" value="6">D</label></div></fieldset>
           <label>Notas (opcional)<textarea name="notes" maxlength="500"></textarea></label>
           <label class="check"><input name="for_patient" type="checkbox" checked><span>Es para el paciente</span></label>
           <button class="primary">Programar recordatorio</button>
@@ -138,6 +142,6 @@
     </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir 5 fotos</span><input type="file" name="files" accept="image/jpeg,image/png" capture="user" multiple required></label><div class="file-hint">Frontal, con buena luz y sin otras personas.</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
-  <script src="/assets/app.js?v=23" defer></script>
+  <script src="/assets/app.js?v=24" defer></script>
 </body>
 </html>
