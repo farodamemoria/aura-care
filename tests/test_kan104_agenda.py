@@ -165,6 +165,8 @@ def test_family_reminder_sends_whatsapp_but_patient_does_not(
     })
     result = client.post("/v1/calendar-tick", headers=HEADERS, params={"at": "2026-09-20T18:20:00+02:00"}).json()
     assert len(result["reminders"]) == 2
+    flags = {item["for_patient"] for item in result["reminders"]}
+    assert flags == {True, False}
     assert len(calls) == 1
     assert calls[0].kind == "reminder"
     assert "Llamar a la cuidadora" in calls[0].spoken_message
