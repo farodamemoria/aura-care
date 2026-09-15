@@ -124,7 +124,14 @@ esperada y su memoria de origen; `POST /v1/cognitive-exercises/{exercise_id}/ans
 resultado y `GET /v1/cognitive-exercises/summary` devuelve realizados, acertados y precisión. El
 portal incluye la pestaña **Ejercicios** para verlos y marcarlos.
 
-### 2.8 Inventario de endpoints
+### 2.8 Agenda y recordatorios
+
+Agenda del paciente y la familia (`calendar_events`: título, categoría `medication`/`routine`/
+`appointment`/`other`, inicio, duración, aviso previo, notas y destinatario) con CRUD.
+`POST /v1/calendar-tick` avisa (una sola vez por evento, a la hora indicada) y deja el evento de
+rutina en la línea de tiempo; el aviso se entrega para leerlo en voz en las gafas.
+
+### 2.9 Inventario de endpoints
 
 Portal y estáticos:
 
@@ -202,6 +209,12 @@ Ejercicios cognitivos:
 
 - `POST /v1/cognitive-exercises`, `GET /v1/cognitive-exercises`,
   `GET /v1/cognitive-exercises/summary`, `POST /v1/cognitive-exercises/{exercise_id}/answer`.
+
+Agenda:
+
+- `POST /v1/calendar-events`, `GET /v1/calendar-events`,
+  `PATCH /v1/calendar-events/{event_id}`, `DELETE /v1/calendar-events/{event_id}`,
+  `POST /v1/calendar-tick`.
 
 Conversación familiar:
 

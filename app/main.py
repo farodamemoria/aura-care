@@ -245,6 +245,47 @@ class CognitiveExerciseSummary(BaseModel):
     accuracy: float
 
 
+class CalendarEventCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    category: str = Field(default="other", pattern="^(medication|routine|appointment|other)$")
+    start_at: datetime
+    duration_minutes: int = Field(default=30, ge=0, le=1440)
+    reminder_minutes_before: int = Field(default=15, ge=0, le=1440)
+    notes: Optional[str] = Field(default=None, max_length=500)
+    for_patient: bool = True
+    enabled: bool = True
+
+
+class CalendarEvent(CalendarEventCreate):
+    id: UUID
+    created_at: datetime
+    reminded_at: Optional[datetime] = None
+
+
+class CalendarEventUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    category: Optional[str] = Field(default=None, pattern="^(medication|routine|appointment|other)$")
+    start_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = Field(default=None, ge=0, le=1440)
+    reminder_minutes_before: Optional[int] = Field(default=None, ge=0, le=1440)
+    notes: Optional[str] = Field(default=None, max_length=500)
+    for_patient: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class CalendarReminder(BaseModel):
+    event_id: UUID
+    title: str
+    category: str
+    start_at: datetime
+    message: str
+
+
+class CalendarTickResult(BaseModel):
+    at: datetime
+    reminders: list[CalendarReminder]
+
+
 class FaceCandidate(BaseModel):
     person_id: UUID
     confidence: float = Field(ge=0, le=100)
@@ -721,6 +762,7 @@ class InMemoryRepository:
         self.medication_doses: dict[UUID, MedicationDose] = {}
         self.safe_zones: dict[UUID, SafeZone] = {}
         self.cognitive_exercises: dict[UUID, CognitiveExercise] = {}
+        self.calendar_events: dict[UUID, CalendarEvent] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
         self.review_images: dict[UUID, bytes] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
@@ -780,6 +822,12 @@ class InMemoryRepository:
             expected_answer TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL,
             correct INTEGER, answered_at TEXT, notes TEXT
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS calendar_events (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, start_at TEXT NOT NULL,
+            duration_minutes INTEGER NOT NULL, reminder_minutes_before INTEGER NOT NULL,
+            notes TEXT, for_patient INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL, reminded_at TEXT
+        )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
             id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
             content TEXT NOT NULL, created_at TEXT NOT NULL
@@ -836,6 +884,15 @@ class InMemoryRepository:
                 answered_at=row["answered_at"], notes=row["notes"],
             )
             self.cognitive_exercises[exercise.id] = exercise
+        for row in self.event_db.execute("SELECT * FROM calendar_events ORDER BY start_at ASC").fetchall():
+            calendar_event = CalendarEvent(
+                id=row["id"], title=row["title"], category=row["category"], start_at=row["start_at"],
+                duration_minutes=row["duration_minutes"],
+                reminder_minutes_before=row["reminder_minutes_before"], notes=row["notes"],
+                for_patient=bool(row["for_patient"]), enabled=bool(row["enabled"]),
+                created_at=row["created_at"], reminded_at=row["reminded_at"],
+            )
+            self.calendar_events[calendar_event.id] = calendar_event
         contacts_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='care_contacts'").fetchone()
         if contacts_row:
             for raw in json.loads(contacts_row[0]):
@@ -1109,6 +1166,24 @@ class InMemoryRepository:
                      exercise.answered_at.isoformat() if exercise.answered_at else None,
                      exercise.notes)
                     for exercise in self.cognitive_exercises.values()
+                ],
+            )
+            self.event_db.commit()
+
+    def save_calendar_events(self) -> None:
+        with self.lock:
+            self.event_db.execute("DELETE FROM calendar_events")
+            self.event_db.executemany(
+                "INSERT INTO calendar_events(id, title, category, start_at, duration_minutes, "
+                "reminder_minutes_before, notes, for_patient, enabled, created_at, reminded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (str(event.id), event.title, event.category, event.start_at.isoformat(),
+                     event.duration_minutes, event.reminder_minutes_before, event.notes,
+                     1 if event.for_patient else 0, 1 if event.enabled else 0,
+                     event.created_at.isoformat(),
+                     event.reminded_at.isoformat() if event.reminded_at else None)
+                    for event in self.calendar_events.values()
                 ],
             )
             self.event_db.commit()
@@ -3374,6 +3449,89 @@ def answer_cognitive_exercise(
         metadata={"exercise_id": str(updated.id), "category": updated.category, "correct": request.correct},
     ))
     return updated
+
+
+def calendar_reminder_message(event: CalendarEvent) -> str:
+    momento = event.start_at.astimezone(family_zone()).strftime("%H:%M")
+    if event.category == "medication":
+        return f"Lembrete: {event.title} ás {momento}."
+    return f"Acórdache: {event.title} ás {momento}."
+
+
+@app.post("/v1/calendar-events", response_model=CalendarEvent, status_code=201)
+def create_calendar_event(
+    request: CalendarEventCreate, authorization: Optional[str] = Header(default=None),
+) -> CalendarEvent:
+    require_auth(authorization)
+    event = CalendarEvent(id=uuid4(), created_at=now(), **request.model_dump())
+    repository.calendar_events[event.id] = event
+    repository.save_calendar_events()
+    return event
+
+
+@app.get("/v1/calendar-events", response_model=list[CalendarEvent])
+def list_calendar_events(
+    days: int = 30, authorization: Optional[str] = Header(default=None),
+) -> list[CalendarEvent]:
+    require_auth(authorization)
+    limite = now() + timedelta(days=max(1, min(days, 365)))
+    events = [
+        event for event in repository.calendar_events.values()
+        if event.enabled and event.start_at <= limite
+    ]
+    return sorted(events, key=lambda event: event.start_at)
+
+
+@app.patch("/v1/calendar-events/{event_id}", response_model=CalendarEvent)
+def update_calendar_event(
+    event_id: UUID, request: CalendarEventUpdate, authorization: Optional[str] = Header(default=None),
+) -> CalendarEvent:
+    require_auth(authorization)
+    event = repository.calendar_events.get(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Calendar event not found")
+    updated = event.model_copy(update=request.model_dump(exclude_unset=True))
+    repository.calendar_events[event_id] = updated
+    repository.save_calendar_events()
+    return updated
+
+
+@app.delete("/v1/calendar-events/{event_id}", status_code=204, response_class=Response)
+def delete_calendar_event(event_id: UUID, authorization: Optional[str] = Header(default=None)) -> Response:
+    require_auth(authorization)
+    repository.calendar_events.pop(event_id, None)
+    repository.save_calendar_events()
+    return Response(status_code=204)
+
+
+@app.post("/v1/calendar-tick", response_model=CalendarTickResult)
+def calendar_tick(
+    at: Optional[datetime] = None, authorization: Optional[str] = Header(default=None),
+) -> CalendarTickResult:
+    require_auth(authorization)
+    reference = medication_reference(at)
+    reminders: list[CalendarReminder] = []
+    for event in list(repository.calendar_events.values()):
+        if not event.enabled or event.reminded_at is not None:
+            continue
+        aviso = event.start_at - timedelta(minutes=event.reminder_minutes_before)
+        if aviso <= reference <= event.start_at + timedelta(minutes=1):
+            updated = event.model_copy(update={"reminded_at": reference})
+            repository.calendar_events[event.id] = updated
+            reminders.append(CalendarReminder(
+                event_id=event.id, title=event.title, category=event.category,
+                start_at=event.start_at, message=calendar_reminder_message(event),
+            ))
+            repository.add_event(EventCreate(
+                kind="routine", source="backend", severity="info",
+                summary=(
+                    f"Recordatorio de agenda: {event.title} a las "
+                    f"{event.start_at.astimezone(family_zone()).strftime('%H:%M')}"
+                ),
+                metadata={"calendar_event_id": str(event.id), "category": event.category},
+            ))
+    repository.save_calendar_events()
+    return CalendarTickResult(at=reference, reminders=reminders)
 
 
 class AcousticDetectionCreate(BaseModel):
