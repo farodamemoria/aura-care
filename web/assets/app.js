@@ -20,9 +20,10 @@ async function load() {
   try {
     const health = await fetch('/health').then(response => response.json());
     document.querySelector('#connection').textContent = `Conectado · ${health.face_provider === 'RekognitionFaceProvider' ? 'reconocimiento activo' : 'modo de prueba'}`;
-    const [people, reviews, contacts, patient, events, tracking] = await Promise.all([
+    const [people, reviews, contacts, patient, events, tracking, exercises, exerciseSummary] = await Promise.all([
       api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
       api('/v1/events?limit=100'), api('/v1/location-sessions/active'),
+      api('/v1/cognitive-exercises'), api('/v1/cognitive-exercises/summary'),
     ]);
     const pending = reviews.filter(review => review.status === 'pending');
     document.querySelector('#people-count').textContent = people.length;
@@ -43,6 +44,7 @@ async function load() {
     await renderReviews(pending, people);
     renderEvents(events);
     renderTracking(tracking);
+    renderExercises(exercises, exerciseSummary);
   } catch (error) {
     document.querySelector('#connection').textContent = 'Sin conexión';
     notify(error);
@@ -103,6 +105,44 @@ function renderTracking(session) {
   const title = document.createElement('strong'); title.textContent = 'Seguimiento de ubicación activo';
   const detail = document.createElement('span'); detail.textContent = point ? `Última actualización: ${new Date(point.recorded_at).toLocaleString()} · precisión aproximada ${Math.round(point.accuracy_meters || 0)} m` : 'Esperando la primera ubicación del teléfono.';
   card.append(title, detail);
+}
+
+async function answerExercise(id, correct) {
+  try {
+    await api(`/v1/cognitive-exercises/${id}/answer`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({correct}),
+    });
+    await load();
+  } catch (error) { notify(error); }
+}
+function renderExercises(exercises, summary) {
+  const target = document.querySelector('#exercises');
+  if (!target) return;
+  const line = document.querySelector('#exercise-summary');
+  if (line) line.textContent = summary.total
+    ? `${summary.completed} de ${summary.total} realizados · ${summary.correct} correctos (${summary.accuracy} %).`
+    : 'Sin resultados todavía.';
+  target.replaceChildren();
+  for (const exercise of exercises.slice(0, 30)) {
+    const article = document.createElement('article'), question = document.createElement('strong'),
+      answer = document.createElement('small'), state = document.createElement('span');
+    article.className = 'person-card';
+    question.textContent = exercise.question;
+    answer.textContent = `Respuesta esperada: ${exercise.expected_answer}`;
+    state.textContent = exercise.status === 'completed'
+      ? (exercise.correct ? 'Resultado: correcto' : 'Resultado: con dificultad')
+      : 'Pendiente';
+    article.append(question, answer, state);
+    if (exercise.status !== 'completed') {
+      const ok = document.createElement('button'); ok.className = 'primary'; ok.textContent = 'Acertó';
+      ok.addEventListener('click', () => answerExercise(exercise.id, true));
+      const hard = document.createElement('button'); hard.className = 'secondary'; hard.textContent = 'Le costó';
+      hard.addEventListener('click', () => answerExercise(exercise.id, false));
+      article.append(ok, hard);
+    }
+    target.append(article);
+  }
+  if (!target.children.length) target.append(empty('Todavía no hay ejercicios. Genera uno desde un recuerdo verificado.'));
 }
 
 function fillPatient(patient) {
@@ -401,5 +441,8 @@ if (talkReset) {
     talkReset.hidden = true;
   });
 }
+
+const exerciseRefresh = document.querySelector('#exercise-refresh');
+if (exerciseRefresh) exerciseRefresh.addEventListener('click', () => load());
 
 load();

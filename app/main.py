@@ -214,6 +214,37 @@ class SafeZoneStatus(BaseModel):
     family_alert_status: Optional[str] = None
 
 
+class CognitiveExerciseCreate(BaseModel):
+    memory_id: UUID
+    category: str = Field(default="recall", pattern="^(recall|orientation|naming)$")
+
+
+class CognitiveExercise(BaseModel):
+    id: UUID
+    memory_id: UUID
+    category: str
+    question: str
+    expected_answer: str
+    created_at: datetime
+    status: str = Field(pattern="^(pending|completed)$")
+    correct: Optional[bool] = None
+    answered_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+class CognitiveExerciseAnswer(BaseModel):
+    correct: bool
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
+class CognitiveExerciseSummary(BaseModel):
+    total: int
+    pending: int
+    completed: int
+    correct: int
+    accuracy: float
+
+
 class FaceCandidate(BaseModel):
     person_id: UUID
     confidence: float = Field(ge=0, le=100)
@@ -689,6 +720,7 @@ class InMemoryRepository:
         self.medication_plans: dict[UUID, MedicationPlan] = {}
         self.medication_doses: dict[UUID, MedicationDose] = {}
         self.safe_zones: dict[UUID, SafeZone] = {}
+        self.cognitive_exercises: dict[UUID, CognitiveExercise] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
         self.review_images: dict[UUID, bytes] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
@@ -743,6 +775,11 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
             radius_meters REAL NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS cognitive_exercises (
+            id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, category TEXT NOT NULL, question TEXT NOT NULL,
+            expected_answer TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL,
+            correct INTEGER, answered_at TEXT, notes TEXT
+        )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
             id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
             content TEXT NOT NULL, created_at TEXT NOT NULL
@@ -790,6 +827,15 @@ class InMemoryRepository:
                 radius_meters=row["radius_meters"], enabled=bool(row["enabled"]), created_at=row["created_at"],
             )
             self.safe_zones[zone.id] = zone
+        for row in self.event_db.execute("SELECT * FROM cognitive_exercises ORDER BY created_at ASC").fetchall():
+            exercise = CognitiveExercise(
+                id=row["id"], memory_id=row["memory_id"], category=row["category"],
+                question=row["question"], expected_answer=row["expected_answer"],
+                created_at=row["created_at"], status=row["status"],
+                correct=(None if row["correct"] is None else bool(row["correct"])),
+                answered_at=row["answered_at"], notes=row["notes"],
+            )
+            self.cognitive_exercises[exercise.id] = exercise
         contacts_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='care_contacts'").fetchone()
         if contacts_row:
             for raw in json.loads(contacts_row[0]):
@@ -1045,7 +1091,24 @@ class InMemoryRepository:
                 [
                     (str(zone.id), zone.name, zone.latitude, zone.longitude, zone.radius_meters,
                      1 if zone.enabled else 0, zone.created_at.isoformat())
-                    for zone in self.safe_zones.values()
+                     for zone in self.safe_zones.values()
+                ],
+            )
+            self.event_db.commit()
+
+    def save_cognitive_exercises(self) -> None:
+        with self.lock:
+            self.event_db.execute("DELETE FROM cognitive_exercises")
+            self.event_db.executemany(
+                "INSERT INTO cognitive_exercises(id, memory_id, category, question, expected_answer, "
+                "created_at, status, correct, answered_at, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (str(exercise.id), str(exercise.memory_id), exercise.category, exercise.question,
+                     exercise.expected_answer, exercise.created_at.isoformat(), exercise.status,
+                     None if exercise.correct is None else (1 if exercise.correct else 0),
+                     exercise.answered_at.isoformat() if exercise.answered_at else None,
+                     exercise.notes)
+                    for exercise in self.cognitive_exercises.values()
                 ],
             )
             self.event_db.commit()
@@ -3243,6 +3306,74 @@ def create_memory(request: MemoryCreate, authorization: Optional[str] = Header(d
 def list_memories(authorization: Optional[str] = Header(default=None)) -> list[Memory]:
     require_auth(authorization)
     return list(repository.memories.values())
+
+
+COGNITIVE_TEMPLATES = {
+    "recall": "Cuéntame con tus palabras: {summary}",
+    "orientation": "¿Cuándo ocurrió esto? {summary}",
+    "naming": "¿Quién o qué aparece en este recuerdo? {summary}",
+}
+
+
+@app.post("/v1/cognitive-exercises", response_model=CognitiveExercise, status_code=201)
+def create_cognitive_exercise(
+    request: CognitiveExerciseCreate, authorization: Optional[str] = Header(default=None),
+) -> CognitiveExercise:
+    require_auth(authorization)
+    memory = repository.memories.get(request.memory_id)
+    if memory is None:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    template = COGNITIVE_TEMPLATES.get(request.category, COGNITIVE_TEMPLATES["recall"])
+    exercise = CognitiveExercise(
+        id=uuid4(), memory_id=memory.id, category=request.category,
+        question=template.format(summary=memory.summary), expected_answer=memory.summary,
+        created_at=now(), status="pending",
+    )
+    repository.cognitive_exercises[exercise.id] = exercise
+    repository.save_cognitive_exercises()
+    return exercise
+
+
+@app.get("/v1/cognitive-exercises", response_model=list[CognitiveExercise])
+def list_cognitive_exercises(authorization: Optional[str] = Header(default=None)) -> list[CognitiveExercise]:
+    require_auth(authorization)
+    return sorted(repository.cognitive_exercises.values(), key=lambda item: item.created_at, reverse=True)
+
+
+@app.get("/v1/cognitive-exercises/summary", response_model=CognitiveExerciseSummary)
+def cognitive_exercise_summary(authorization: Optional[str] = Header(default=None)) -> CognitiveExerciseSummary:
+    require_auth(authorization)
+    items = list(repository.cognitive_exercises.values())
+    completed = [item for item in items if item.status == "completed"]
+    correct = sum(1 for item in completed if item.correct)
+    accuracy = round(correct / len(completed) * 100, 1) if completed else 0.0
+    return CognitiveExerciseSummary(
+        total=len(items), pending=len(items) - len(completed),
+        completed=len(completed), correct=correct, accuracy=accuracy,
+    )
+
+
+@app.post("/v1/cognitive-exercises/{exercise_id}/answer", response_model=CognitiveExercise)
+def answer_cognitive_exercise(
+    exercise_id: UUID, request: CognitiveExerciseAnswer, authorization: Optional[str] = Header(default=None),
+) -> CognitiveExercise:
+    require_auth(authorization)
+    exercise = repository.cognitive_exercises.get(exercise_id)
+    if exercise is None:
+        raise HTTPException(status_code=404, detail="Cognitive exercise not found")
+    updated = exercise.model_copy(update={
+        "status": "completed", "correct": request.correct,
+        "answered_at": now(), "notes": request.notes,
+    })
+    repository.cognitive_exercises[exercise_id] = updated
+    repository.save_cognitive_exercises()
+    repository.add_event(EventCreate(
+        kind="routine", source="portal", severity="info",
+        summary=("Ejercicio cognitivo completado correctamente" if request.correct
+                 else "Ejercicio cognitivo completado con dificultad"),
+        metadata={"exercise_id": str(updated.id), "category": updated.category, "correct": request.correct},
+    ))
+    return updated
 
 
 class AcousticDetectionCreate(BaseModel):

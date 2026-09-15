@@ -116,7 +116,15 @@ GPS, hasta 50 m), avisa una sola vez cada 15 minutos a la red de cuidados por Wh
 `lost`) y deja el evento en la línea de tiempo. La evaluación también se ejecuta al actualizar una
 sesión de ubicación, para que el escalado sea automático durante el seguimiento.
 
-### 2.7 Inventario de endpoints
+### 2.7 Ejercicios cognitivos
+
+Ejercicios generados a partir de **recuerdos verificados** (`memories`): `POST /v1/cognitive-exercises`
+crea un ejercicio (categoría `recall`, `orientation` o `naming`) con la pregunta, la respuesta
+esperada y su memoria de origen; `POST /v1/cognitive-exercises/{exercise_id}/answer` registra el
+resultado y `GET /v1/cognitive-exercises/summary` devuelve realizados, acertados y precisión. El
+portal incluye la pestaña **Ejercicios** para verlos y marcarlos.
+
+### 2.8 Inventario de endpoints
 
 Portal y estáticos:
 
@@ -190,6 +198,11 @@ Zonas seguras:
 - `POST /v1/safe-zones`, `GET /v1/safe-zones`, `PATCH /v1/safe-zones/{zone_id}`,
   `DELETE /v1/safe-zones/{zone_id}`, `POST /v1/safe-zones/check`.
 
+Ejercicios cognitivos:
+
+- `POST /v1/cognitive-exercises`, `GET /v1/cognitive-exercises`,
+  `GET /v1/cognitive-exercises/summary`, `POST /v1/cognitive-exercises/{exercise_id}/answer`.
+
 Conversación familiar:
 
 - `POST /v1/family/ask`.
@@ -208,7 +221,7 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v27`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v28`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css`.
