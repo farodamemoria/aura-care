@@ -47,10 +47,13 @@ El portal y las apps hablan **solo con AURA Care**; AURA Care habla con los prov
 - **Stack**: Python 3.12, **FastAPI** `0.2.0` (`app/main.py`), servido con **uvicorn** en `0.0.0.0:8082`
   (en Docker el `Dockerfile` usa el puerto 8080: `python:3.12-slim` + `uvicorn app.main:app`).
 - **Dependencias** (`requirements.txt`): `fastapi==0.116.1`, `uvicorn[standard]==0.35.0`,
-  `pydantic==2.11.7`, `python-multipart`, `boto3==1.40.21`, `pytest==8.4.1`, `httpx`, `tzdata`.
-- **Persistencia**: SQLite (`faro-events.db`) para eventos y configuración, y ficheros para las
-  fotos de personas (`person-photos/`). Tablas: `events`, `configuration`, `pairing_invites`,
-  `device_credentials`, `memories`, `family_messages`, `whatsapp_status`, `family_alert_rules`.
+  `pydantic==2.11.7`, `python-multipart`, `boto3==1.40.21`, `cryptography==50.0.1`, `pytest==8.4.1`, `httpx`, `tzdata`.
+- **Persistencia**: SQLite (`faro-events.db`) para eventos, configuración y el resto de entidades;
+  ficheros para las fotos de personas (`person-photos/`) y para la evidencia visual de las
+  revisiones (`review-images/`, **cifrada en reposo** con Fernet). Tablas: `events`, `configuration`,
+  `pairing_invites`, `device_credentials`, `memories`, `object_memories`, `medication_plans`,
+  `medication_doses`, `safe_zones`, `cognitive_exercises`, `calendar_events`, `reviews`,
+  `family_messages`, `whatsapp_status`, `family_alert_rules`.
 - **Autenticación**: cabecera `Authorization: Bearer <AURA_LOCAL_TOKEN>`. La versión actual del
   portal es de **acceso público** (token por defecto de desarrollo, `LOCAL_TOKEN` en `app/main.py`);
   el endurecimiento y la rotación de credenciales están pendientes (**KAN-31**). El objetivo de
@@ -67,8 +70,10 @@ El portal y las apps hablan **solo con AURA Care**; AURA Care habla con los prov
   se indexa en Rekognition (`SearchFacesByImage`).
 - La app envía fotogramas a `POST /v1/recognitions`; el backend decide con criterio conservador:
   confianza mínima **95 %**, media mínima **97 %**, **2 fotogramas** coincidentes, enfriamiento de
-  10 minutos y revisión de imágenes con TTL de 24 horas. Si duda, no pronuncia el nombre y lo manda
-  a «Personas por aclarar» (`GET /v1/reviews`, `POST /v1/reviews/{review_id}/resolve`).
+10 minutos y revisión de imágenes con TTL de 24 horas. Si duda, no pronuncia el nombre y lo manda
+a «Personas por aclarar» (`GET /v1/reviews`, `POST /v1/reviews/{review_id}/resolve`). Las
+revisiones y su evidencia **persisten entre reinicios** (SQLite + `review-images/` cifrada con
+`AURA_REVIEW_SECRET`) y se **borran de forma segura** al resolverlas o al caducar (KAN-78).
 
 ### 2.2 Chat familiar y avisos por WhatsApp
 
