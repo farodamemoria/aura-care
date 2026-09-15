@@ -133,10 +133,12 @@ portal incluye la pestaña **Ejercicios** para verlos y marcarlos.
 
 Agenda del paciente y la familia (`calendar_events`: título, categoría `medication`/`routine`/
 `appointment`/`other`, inicio, duración, aviso previo, notas y destinatario) con CRUD.
-`POST /v1/calendar-tick` avisa (una sola vez por evento, a la hora indicada) y deja el evento de
-rutina en la línea de tiempo; el aviso se entrega para leerlo en voz en las gafas. El chat familiar
-(`POST /v1/family/ask`) puede **crear recordatorios** con la herramienta `crear_recordatorio` a
-partir de una petición del familiar y responde sobre la «Agenda próxima» (KAN-97).
+`POST /v1/calendar-tick` avisa a la hora indicada (una vez o **recurrente**: diario / semanal con
+días / mensual, con «cada N» y «hasta fecha»); los recordatorios **para el paciente** se entregan
+para leerlos en voz en las gafas y los **para la familia** se envían por **WhatsApp** a la red de
+cuidados. El planificador interno (`AURA_TICK_SCHEDULER=1`) ejecuta los ticks periódicamente. El
+chat familiar (`POST /v1/family/ask`) puede **crear recordatorios** con la herramienta
+`crear_recordatorio` a partir de una petición del familiar y responde sobre la «Agenda próxima» (KAN-97).
 
 ### 2.9 Inventario de endpoints
 
@@ -241,7 +243,7 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v29`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v30`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.
@@ -256,8 +258,8 @@ Escucha ambiental:
     «Empezar de nuevo».
   - Ejercicios: ejercicios cognitivos creados desde recuerdos verificados y su resultado.
   - Agenda (KAN-104): recordatorios del paciente y la familia sobre `/v1/calendar-events`
-    (título, categoría, hora, duración, aviso previo y destinatario) con alta, cambio de hora,
-    activar/pausar y borrado.
+    (título, categoría, hora, duración, aviso previo, **repetición** —una vez/diario/semanal con días/mensual,
+    «cada N» y «hasta fecha»— y destinatario) con alta, cambio de hora, activar/pausar y borrado.
 - **Versionado de caché**: al cambiar el frontend se sube la versión de `app.js?v=NN` y del `CACHE`
   del service worker para forzar la actualización.
 - **TWA**: el APK de Faro Familia envuelve el portal a pantalla completa; el backend sirve el

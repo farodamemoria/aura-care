@@ -20,6 +20,8 @@ import urllib.error
 import urllib.request
 import sqlite3
 import math
+import calendar
+import threading
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -266,6 +268,10 @@ class CalendarEventCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
     for_patient: bool = True
     enabled: bool = True
+    recurrence: str = Field(default="none", pattern="^(none|daily|weekly|monthly)$")
+    recurrence_interval: int = Field(default=1, ge=1, le=366)
+    recurrence_until: Optional[date] = None
+    recurrence_weekdays: Optional[list[int]] = None
 
 
 class CalendarEvent(CalendarEventCreate):
@@ -283,6 +289,10 @@ class CalendarEventUpdate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
     for_patient: Optional[bool] = None
     enabled: Optional[bool] = None
+    recurrence: Optional[str] = Field(default=None, pattern="^(none|daily|weekly|monthly)$")
+    recurrence_interval: Optional[int] = Field(default=None, ge=1, le=366)
+    recurrence_until: Optional[date] = None
+    recurrence_weekdays: Optional[list[int]] = None
 
 
 class CalendarReminder(BaseModel):
@@ -416,7 +426,7 @@ class OnboardingConfiguration(BaseModel):
 
 
 class EmergencyAlertCreate(BaseModel):
-    kind: str = Field(pattern="^(episode|lost|hazard|medication)$")
+    kind: str = Field(pattern="^(episode|lost|hazard|medication|reminder)$")
     spoken_message: str = Field(min_length=1, max_length=500)
     explicit_help_request: bool
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
@@ -842,7 +852,9 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, start_at TEXT NOT NULL,
             duration_minutes INTEGER NOT NULL, reminder_minutes_before INTEGER NOT NULL,
             notes TEXT, for_patient INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL, reminded_at TEXT
+            created_at TEXT NOT NULL, reminded_at TEXT,
+            recurrence TEXT NOT NULL DEFAULT 'none', recurrence_interval INTEGER NOT NULL DEFAULT 1,
+            recurrence_until TEXT, recurrence_weekdays TEXT
         )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS reviews (
             id TEXT PRIMARY KEY, created_at TEXT NOT NULL, status TEXT NOT NULL,
@@ -861,6 +873,15 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, keywords TEXT NOT NULL, description TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
         )""")
+        calendar_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(calendar_events)").fetchall()}
+        for column, statement in (
+            ("recurrence", "ALTER TABLE calendar_events ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'"),
+            ("recurrence_interval", "ALTER TABLE calendar_events ADD COLUMN recurrence_interval INTEGER NOT NULL DEFAULT 1"),
+            ("recurrence_until", "ALTER TABLE calendar_events ADD COLUMN recurrence_until TEXT"),
+            ("recurrence_weekdays", "ALTER TABLE calendar_events ADD COLUMN recurrence_weekdays TEXT"),
+        ):
+            if column not in calendar_columns:
+                self.event_db.execute(statement)
         self.event_db.commit()
         for row in self.event_db.execute("SELECT * FROM memories ORDER BY created_at ASC").fetchall():
             memory = Memory(
@@ -911,6 +932,12 @@ class InMemoryRepository:
                 reminder_minutes_before=row["reminder_minutes_before"], notes=row["notes"],
                 for_patient=bool(row["for_patient"]), enabled=bool(row["enabled"]),
                 created_at=row["created_at"], reminded_at=row["reminded_at"],
+                recurrence=row["recurrence"] or "none",
+                recurrence_interval=row["recurrence_interval"] or 1,
+                recurrence_until=row["recurrence_until"],
+                recurrence_weekdays=(
+                    json.loads(row["recurrence_weekdays"]) if row["recurrence_weekdays"] else None
+                ),
             )
             self.calendar_events[calendar_event.id] = calendar_event
         for row in self.event_db.execute("SELECT * FROM reviews ORDER BY created_at ASC").fetchall():
@@ -1264,14 +1291,18 @@ class InMemoryRepository:
             self.event_db.execute("DELETE FROM calendar_events")
             self.event_db.executemany(
                 "INSERT INTO calendar_events(id, title, category, start_at, duration_minutes, "
-                "reminder_minutes_before, notes, for_patient, enabled, created_at, reminded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "reminder_minutes_before, notes, for_patient, enabled, created_at, reminded_at, "
+                "recurrence, recurrence_interval, recurrence_until, recurrence_weekdays) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (str(event.id), event.title, event.category, event.start_at.isoformat(),
                      event.duration_minutes, event.reminder_minutes_before, event.notes,
                      1 if event.for_patient else 0, 1 if event.enabled else 0,
                      event.created_at.isoformat(),
-                     event.reminded_at.isoformat() if event.reminded_at else None)
+                     event.reminded_at.isoformat() if event.reminded_at else None,
+                     event.recurrence, event.recurrence_interval,
+                     event.recurrence_until.isoformat() if event.recurrence_until else None,
+                     json.dumps(event.recurrence_weekdays) if event.recurrence_weekdays is not None else None)
                     for event in self.calendar_events.values()
                 ],
             )
@@ -3627,6 +3658,70 @@ def calendar_reminder_message(event: CalendarEvent) -> str:
     return f"Acórdache: {event.title} ás {momento}."
 
 
+def add_months(moment: datetime, months: int) -> datetime:
+    index = moment.month - 1 + months
+    year = moment.year + index // 12
+    month = index % 12 + 1
+    day = min(moment.day, calendar.monthrange(year, month)[1])
+    return moment.replace(year=year, month=month, day=day)
+
+
+def next_calendar_occurrence(event: CalendarEvent, reference: datetime) -> Optional[datetime]:
+    """Siguiente inicio de un evento recurrente, o None si ya no se repite."""
+    interval = max(1, event.recurrence_interval)
+    base = event.start_at
+    if event.recurrence == "daily":
+        candidate = base + timedelta(days=interval)
+        while candidate <= reference:
+            candidate += timedelta(days=interval)
+    elif event.recurrence == "weekly":
+        weekdays = sorted({int(day) for day in (event.recurrence_weekdays or []) if 0 <= int(day) <= 6})
+        if event.recurrence_weekdays and not weekdays:
+            return None
+        if weekdays:
+            candidate = base
+            for _ in range(366 * 2):
+                candidate += timedelta(days=1)
+                if candidate > reference and candidate.weekday() in weekdays:
+                    break
+            else:
+                return None
+        else:
+            candidate = base + timedelta(weeks=interval)
+            while candidate <= reference:
+                candidate += timedelta(weeks=interval)
+    elif event.recurrence == "monthly":
+        candidate = add_months(base, interval)
+        for _ in range(480):
+            if candidate > reference:
+                break
+            candidate = add_months(candidate, interval)
+        else:
+            return None
+    else:
+        return None
+    if event.recurrence_until is not None and candidate.astimezone(family_zone()).date() > event.recurrence_until:
+        return None
+    return candidate
+
+
+def calendar_family_message(event: CalendarEvent) -> str:
+    momento = event.start_at.astimezone(family_zone()).strftime("%H:%M")
+    return f"Recordatorio de Faro: {event.title} a las {momento}."
+
+
+def dispatch_calendar_family_reminder(message: str) -> dict:
+    """Avisa por WhatsApp a la red de cuidados de un recordatorio para la familia."""
+    contacts = enabled_alert_contacts()
+    if not contacts:
+        return {"status": "no_contact", "recipients_delivered": 0}
+    deliveries, _ = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+        kind="reminder", spoken_message=message, explicit_help_request=False,
+    ))
+    delivered = sum(1 for _, delivery in deliveries if delivery.message_id)
+    return {"status": "sent" if delivered else "test_mode", "recipients_delivered": delivered}
+
+
 @app.post("/v1/calendar-events", response_model=CalendarEvent, status_code=201)
 def create_calendar_event(
     request: CalendarEventCreate, authorization: Optional[str] = Header(default=None),
@@ -3673,34 +3768,74 @@ def delete_calendar_event(event_id: UUID, authorization: Optional[str] = Header(
     return Response(status_code=204)
 
 
-@app.post("/v1/calendar-tick", response_model=CalendarTickResult)
-def calendar_tick(
-    at: Optional[datetime] = None, authorization: Optional[str] = Header(default=None),
-) -> CalendarTickResult:
-    require_auth(authorization)
-    reference = medication_reference(at)
+def run_calendar_tick(reference: Optional[datetime] = None) -> CalendarTickResult:
+    reference = medication_reference(reference)
     reminders: list[CalendarReminder] = []
     for event in list(repository.calendar_events.values()):
         if not event.enabled or event.reminded_at is not None:
             continue
         aviso = event.start_at - timedelta(minutes=event.reminder_minutes_before)
-        if aviso <= reference <= event.start_at + timedelta(minutes=1):
-            updated = event.model_copy(update={"reminded_at": reference})
-            repository.calendar_events[event.id] = updated
-            reminders.append(CalendarReminder(
-                event_id=event.id, title=event.title, category=event.category,
-                start_at=event.start_at, message=calendar_reminder_message(event),
-            ))
-            repository.add_event(EventCreate(
-                kind="routine", source="backend", severity="info",
-                summary=(
-                    f"Recordatorio de agenda: {event.title} a las "
-                    f"{event.start_at.astimezone(family_zone()).strftime('%H:%M')}"
-                ),
-                metadata={"calendar_event_id": str(event.id), "category": event.category},
-            ))
+        if not (aviso <= reference <= event.start_at + timedelta(minutes=1)):
+            continue
+        message = calendar_reminder_message(event)
+        reminders.append(CalendarReminder(
+            event_id=event.id, title=event.title, category=event.category,
+            start_at=event.start_at, message=message,
+        ))
+        repository.add_event(EventCreate(
+            kind="routine", source="backend", severity="info",
+            summary=(
+                f"Recordatorio de agenda: {event.title} a las "
+                f"{event.start_at.astimezone(family_zone()).strftime('%H:%M')}"
+            ),
+            metadata={"calendar_event_id": str(event.id), "category": event.category,
+                      "for_patient": event.for_patient},
+        ))
+        if not event.for_patient:
+            dispatch_calendar_family_reminder(calendar_family_message(event))
+        next_start = next_calendar_occurrence(event, reference) if event.recurrence != "none" else None
+        if next_start is not None:
+            repository.calendar_events[event.id] = event.model_copy(
+                update={"start_at": next_start, "reminded_at": None}
+            )
+        else:
+            repository.calendar_events[event.id] = event.model_copy(update={"reminded_at": reference})
     repository.save_calendar_events()
     return CalendarTickResult(at=reference, reminders=reminders)
+
+
+@app.post("/v1/calendar-tick", response_model=CalendarTickResult)
+def calendar_tick(
+    at: Optional[datetime] = None, authorization: Optional[str] = Header(default=None),
+) -> CalendarTickResult:
+    require_auth(authorization)
+    return run_calendar_tick(at)
+
+
+def start_tick_scheduler(interval_seconds: int = 60) -> None:
+    """Hilo que ejecuta los ticks periódicamente para que los avisos actúen solos."""
+
+    def loop() -> None:
+        stop = threading.Event()
+        while not stop.wait(max(15, interval_seconds)):
+            try:
+                run_medication_tick()
+                run_calendar_tick()
+            except Exception:  # noqa: BLE001 - el planificador no debe morir
+                continue
+
+    threading.Thread(target=loop, daemon=True, name="aura-tick-scheduler").start()
+
+
+@app.on_event("startup")
+def _start_tick_scheduler() -> None:
+    if os.getenv("AURA_TICK_SCHEDULER", "0").lower() not in {"1", "true", "yes", "on"}:
+        return
+    try:
+        interval = int(os.getenv("AURA_TICK_INTERVAL_SECONDS", "60"))
+    except ValueError:
+        interval = 60
+    start_tick_scheduler(interval)
 
 
 class AcousticDetectionCreate(BaseModel):
