@@ -93,6 +93,36 @@ def test_tool_rejects_bad_arguments() -> None:
     assert main.execute_family_tool("desconocida", "{}")["detail"] == "unknown tool"
 
 
+def test_tool_creates_recurring_reminder() -> None:
+    result = main.execute_family_tool("crear_recordatorio", json.dumps({
+        "titulo": "Medicación de la tensión", "fecha_hora": INICIO, "categoria": "medication",
+        "recurrencia": "semanal", "dias_semana": [0, 2, 4], "repetir_cada": 1, "repetir_hasta": "2026-12-31",
+    }))
+    assert result["status"] == "ok"
+    event = next(iter(main.repository.calendar_events.values()))
+    assert event.recurrence == "weekly"
+    assert event.recurrence_weekdays == [0, 2, 4]
+    assert event.recurrence_until.isoformat() == "2026-12-31"
+
+
+def test_prompt_requires_all_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_urlopen(request, timeout=None):  # noqa: ANN001
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return _FakeResponse({"output": [{"type": "message", "content": [
+            {"type": "output_text", "text": "¿A qué hora?"},
+        ]}]})
+
+    monkeypatch.setenv("AURA_OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
+    main.openai_family_answer("Programa una pastilla", [], "es")
+    instructions = captured["payload"]["instructions"]
+    assert "TODOS estos campos" in instructions
+    assert "antelación" in instructions
+    assert "se repite" in instructions
+
+
 def test_prompt_exposes_agenda_and_calendar_tool(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     main.execute_family_tool("crear_recordatorio", json.dumps({
         "titulo": "Visita al médico", "fecha_hora": INICIO, "categoria": "appointment",
