@@ -82,7 +82,16 @@ El portal y las apps hablan **solo con AURA Care**; AURA Care habla con los prov
   deduplicación y webhook de estados (`POST /v1/whatsapp/webhook`, `GET /v1/whatsapp/statuses`).
   En Development solo entrega a números de prueba; el paso a **Live** es KAN-89.
 
-### 2.3 Escucha ambiental
+### 2.3 Memoria de objetos
+
+Los avistamientos de objetos (llaves, mando, gafas…) se guardan como **memorias de objeto**
+(`object_memories`): nombre, lugar, momento, confianza y origen. Se registran por
+`POST /v1/object-memories` (y desde la observación de las gafas `keys_location`), se consultan por
+`GET /v1/object-memories` y `GET /v1/object-memories/last`, y aparecen en la línea de tiempo como
+eventos `object_location`. El chat familiar responde «¿dónde están las llaves?» con el último lugar
+y momento, tanto con la IA como con la respuesta determinista de respaldo.
+
+### 2.4 Escucha ambiental
 
 `app/environmental_listening.py` es un motor determinista (sin diagnósticos) que, ante señales
 acústicas repetidas (tos, atragantamiento, caída, quejido, llanto, grito), hace **una sola**
@@ -90,7 +99,7 @@ pregunta de comprobación y escala solo si hay petición de ayuda, persistencia 
 Se expone por `POST /v1/acoustic-events`, `POST /v1/acoustic-events/response`,
 `POST /v1/acoustic-events/tick` y `GET /v1/acoustic-episodes`.
 
-### 2.4 Inventario de endpoints
+### 2.5 Inventario de endpoints
 
 Portal y estáticos:
 
@@ -146,10 +155,11 @@ Ubicación:
   `GET /v1/location-sessions/active`, `POST /v1/location-sessions/{session_id}/stop`,
   `GET /v1/location-share/{share_token}`, `POST /v1/location/answer`.
 
-Eventos y memoria:
+Eventos, memoria y objetos:
 
 - `POST /v1/events`, `GET /v1/events`, `GET /v1/conversation-memory/search`,
-  `POST /v1/memories`, `GET /v1/memories`.
+  `POST /v1/memories`, `GET /v1/memories`, `POST /v1/object-memories`,
+  `GET /v1/object-memories`, `GET /v1/object-memories/last`.
 
 Conversación familiar:
 
