@@ -98,6 +98,32 @@ class Memory(MemoryCreate):
     created_at: datetime
 
 
+class ObjectMemoryCreate(BaseModel):
+    object_name: str = Field(min_length=1, max_length=80)
+    place: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=500)
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    source: Optional[str] = Field(default=None, max_length=40)
+    seen_at: Optional[datetime] = None
+
+
+class ObjectMemory(ObjectMemoryCreate):
+    id: UUID
+    seen_at: datetime
+    created_at: datetime
+
+
+def object_memory_matches(memory: ObjectMemory, query: str) -> bool:
+    """Coincidencia por nombre de objeto, sin acentos ni mayusculas."""
+    query_normalized = normalize_memory_text(query).strip()
+    name_normalized = normalize_memory_text(memory.object_name).strip()
+    if not query_normalized or not name_normalized:
+        return False
+    if name_normalized in query_normalized:
+        return True
+    return bool(memory_terms(name_normalized) & memory_terms(query_normalized))
+
+
 class FaceCandidate(BaseModel):
     person_id: UUID
     confidence: float = Field(ge=0, le=100)
@@ -569,6 +595,7 @@ class InMemoryRepository:
                 person = Person.model_validate(raw)
                 self.people[person.id] = person
         self.memories: dict[UUID, Memory] = {}
+        self.object_memories: dict[UUID, ObjectMemory] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
         self.review_images: dict[UUID, bytes] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
@@ -604,6 +631,11 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, person_id TEXT, kind TEXT NOT NULL,
             summary TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS object_memories (
+            id TEXT PRIMARY KEY, object_name TEXT NOT NULL, place TEXT,
+            description TEXT, confidence REAL, source TEXT,
+            seen_at TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
             id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
             content TEXT NOT NULL, created_at TEXT NOT NULL
@@ -624,6 +656,13 @@ class InMemoryRepository:
                 summary=row["summary"], created_at=row["created_at"],
             )
             self.memories[memory.id] = memory
+        for row in self.event_db.execute("SELECT * FROM object_memories ORDER BY seen_at ASC").fetchall():
+            object_memory = ObjectMemory(
+                id=row["id"], object_name=row["object_name"], place=row["place"],
+                description=row["description"], confidence=row["confidence"], source=row["source"],
+                seen_at=row["seen_at"], created_at=row["created_at"],
+            )
+            self.object_memories[object_memory.id] = object_memory
         contacts_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='care_contacts'").fetchone()
         if contacts_row:
             for raw in json.loads(contacts_row[0]):
@@ -820,6 +859,21 @@ class InMemoryRepository:
                     (str(memory.id), str(memory.person_id) if memory.person_id else None,
                      memory.kind, memory.summary, memory.created_at.isoformat())
                     for memory in self.memories.values()
+                ],
+            )
+            self.event_db.commit()
+
+    def save_object_memories(self) -> None:
+        with self.lock:
+            self.event_db.execute("DELETE FROM object_memories")
+            self.event_db.executemany(
+                "INSERT INTO object_memories(id, object_name, place, description, confidence, source, seen_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (str(memory.id), memory.object_name, memory.place, memory.description,
+                     memory.confidence, memory.source, memory.seen_at.isoformat(),
+                     memory.created_at.isoformat())
+                    for memory in self.object_memories.values()
                 ],
             )
             self.event_db.commit()
@@ -1659,6 +1713,13 @@ def record_protective_observation(
         window.clear()
         return ProtectiveObservationDecision(action="none", consecutive_observations=0)
     if request.kind == "keys_location" and request.confidence >= 0.9 and request.location_label:
+        object_memory = ObjectMemory(
+            id=uuid4(), object_name="llaves", place=request.location_label,
+            description=request.description, confidence=request.confidence, source="glasses",
+            seen_at=observed_at, created_at=now(),
+        )
+        repository.object_memories[object_memory.id] = object_memory
+        repository.save_object_memories()
         repository.add_event(EventCreate(
             kind="object_location", summary=f"Las llaves se vieron en {request.location_label}",
             source="glasses", metadata={"object": "keys", "location": request.location_label,
@@ -2116,6 +2177,36 @@ def build_family_summary(events: list[Event], language: str, question: str = "",
     return " ".join(parts)
 
 
+OBJECT_LOOKUP_LABELS = {
+    "es": {
+        "found": "Se vio {object} por última vez en {place} ({moment}).",
+        "found_no_place": "Se vio {object} por última vez {moment}.",
+    },
+    "gl": {
+        "found": "Viu {object} por última vez en {place} ({moment}).",
+        "found_no_place": "Viu {object} por última vez {moment}.",
+    },
+    "en": {
+        "found": "{object} was last seen in {place} ({moment}).",
+        "found_no_place": "{object} was last seen {moment}.",
+    },
+}
+
+
+def object_lookup_answer(question: str, language: str) -> Optional[str]:
+    """Respuesta determinista para «¿dónde está X?» cuando la IA no esta disponible."""
+    matches = find_object_memories(question, limit=1)
+    if not matches:
+        return None
+    memory = matches[0]
+    labels = OBJECT_LOOKUP_LABELS.get(language, OBJECT_LOOKUP_LABELS["es"])
+    moment = memory.seen_at.astimezone(family_zone()).strftime("%d/%m/%Y %H:%M")
+    object_label = memory.object_name.strip().lower()
+    if memory.place:
+        return labels["found"].format(object=object_label, place=memory.place, moment=moment)
+    return labels["found_no_place"].format(object=object_label, moment=moment)
+
+
 FAMILY_ALERT_TOOL = {
     "type": "function",
     "name": "registrar_aviso",
@@ -2172,6 +2263,13 @@ def openai_family_answer(
         moment = event.occurred_at.astimezone(family_zone()).strftime("%H:%M")
         lines.append(f"- {moment} · {event.kind}{speaker_label}: {event.summary}")
     context = "\n".join(lines) if lines else "(sin eventos registrados en ese día)"
+    object_lines: list[str] = []
+    for memory in sorted(repository.object_memories.values(), key=lambda item: item.seen_at, reverse=True)[:8]:
+        moment = memory.seen_at.astimezone(family_zone()).strftime("%d/%m %H:%M")
+        where = f" en {memory.place}" if memory.place else ""
+        object_lines.append(f"- {memory.object_name}{where} ({moment})")
+    if object_lines:
+        context += "\n\nObjetos recordados recientemente:\n" + "\n".join(object_lines)
     transcript = "\n".join(
         f"{'Familiar' if turn.get('role') == 'user' else 'Faro'}: {turn.get('content', '')}"
         for turn in (history or [])
@@ -2204,6 +2302,9 @@ def openai_family_answer(
         "recordatorios, horarios, tareas recurrentes ni envíos a demanda. Si te lo piden, dilo con "
         "naturalidad y ofrece solo lo que sí puedes hacer.\n"
         "- No inventes datos del paciente: usa solo los eventos y datos proporcionados; si algo no "
+        "aparece, dilo con claridad.\n"
+        "- Si preguntan por un objeto (llaves, mando, gafas...), usa «Objetos recordados "
+        "recientemente» y responde con el lugar y el momento en que se vio por última vez; si no "
         "aparece, dilo con claridad.\n"
         "- No des consejos médicos ni alarmes sin motivo.\n"
         "- Sé coherente con los mensajes anteriores de esta conversación y no te repitas.\n"
@@ -2300,7 +2401,7 @@ def ask_family_question(
             answer = FAMILY_CLOSERS_REPLY.get(language, FAMILY_CLOSERS_REPLY["es"])
         generated_by = "openai"
     else:
-        answer = build_family_summary(events, language, question, day_label)
+        answer = object_lookup_answer(question, language) or build_family_summary(events, language, question, day_label)
     repository.add_family_message(conversation_id, "assistant", answer)
     sources = [
         FamilyAnswerSource(
@@ -2558,6 +2659,69 @@ def resolve_review(review_id: UUID, resolution: ReviewResolution, authorization:
     repository.reviews[review_id] = updated
     repository.review_images.pop(review_id, None)
     return updated
+
+
+def find_object_memories(name: str, limit: int = 10) -> list[ObjectMemory]:
+    """Objetos vistos cuyo nombre coincide con la consulta, del mas reciente al mas antiguo."""
+    matches = [
+        memory for memory in repository.object_memories.values()
+        if object_memory_matches(memory, name)
+    ]
+    matches.sort(key=lambda memory: (memory.seen_at, memory.created_at), reverse=True)
+    return matches[: max(1, limit)]
+
+
+OBJECT_EVENT_SOURCES = {"glasses": "glasses", "phone": "phone", "portal": "portal", "backend": "backend"}
+
+
+def record_object_event(memory: ObjectMemory) -> None:
+    """Deja el avistamiento en la linea de tiempo del portal."""
+    where = f" en {memory.place}" if memory.place else ""
+    source = OBJECT_EVENT_SOURCES.get((memory.source or "glasses").strip().lower(), "glasses")
+    repository.add_event(EventCreate(
+        kind="object_location",
+        summary=f"Se vio {memory.object_name}{where}",
+        source=source,
+        metadata={"object": memory.object_name, "location": memory.place or "", "confidence": memory.confidence or 0.0},
+    ))
+
+
+@app.post("/v1/object-memories", response_model=ObjectMemory, status_code=201)
+def create_object_memory(
+    request: ObjectMemoryCreate, authorization: Optional[str] = Header(default=None),
+) -> ObjectMemory:
+    require_auth(authorization)
+    created_at = now()
+    memory = ObjectMemory(
+        id=uuid4(), object_name=request.object_name, place=request.place,
+        description=request.description, confidence=request.confidence, source=request.source,
+        seen_at=request.seen_at or created_at, created_at=created_at,
+    )
+    repository.object_memories[memory.id] = memory
+    repository.save_object_memories()
+    record_object_event(memory)
+    return memory
+
+
+@app.get("/v1/object-memories", response_model=list[ObjectMemory])
+def list_object_memories(
+    name: Optional[str] = None, limit: int = 20, authorization: Optional[str] = Header(default=None),
+) -> list[ObjectMemory]:
+    require_auth(authorization)
+    if name:
+        return find_object_memories(name, limit=min(limit, 50))
+    memories = sorted(
+        repository.object_memories.values(),
+        key=lambda memory: (memory.seen_at, memory.created_at), reverse=True,
+    )
+    return memories[: min(limit, 50)]
+
+
+@app.get("/v1/object-memories/last", response_model=Optional[ObjectMemory])
+def last_object_memory(name: str, authorization: Optional[str] = Header(default=None)) -> Optional[ObjectMemory]:
+    require_auth(authorization)
+    matches = find_object_memories(name, limit=1)
+    return matches[0] if matches else None
 
 
 @app.post("/v1/memories", response_model=Memory, status_code=201)
