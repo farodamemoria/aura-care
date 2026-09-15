@@ -129,7 +129,9 @@ portal incluye la pestaña **Ejercicios** para verlos y marcarlos.
 Agenda del paciente y la familia (`calendar_events`: título, categoría `medication`/`routine`/
 `appointment`/`other`, inicio, duración, aviso previo, notas y destinatario) con CRUD.
 `POST /v1/calendar-tick` avisa (una sola vez por evento, a la hora indicada) y deja el evento de
-rutina en la línea de tiempo; el aviso se entrega para leerlo en voz en las gafas.
+rutina en la línea de tiempo; el aviso se entrega para leerlo en voz en las gafas. El chat familiar
+(`POST /v1/family/ask`) puede **crear recordatorios** con la herramienta `crear_recordatorio` a
+partir de una petición del familiar y responde sobre la «Agenda próxima» (KAN-97).
 
 ### 2.9 Inventario de endpoints
 
