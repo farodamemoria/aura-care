@@ -26,6 +26,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("AURA_LOCAL_TOKEN", TOKEN)
     main.repository.calendar_events.clear()
     main.repository.care_contacts.clear()
+    main.repository.event_db.execute("DELETE FROM voice_reminders")
+    main.repository.event_db.commit()
     return TestClient(main.app)
 
 
@@ -179,3 +181,20 @@ def test_run_calendar_tick_and_optin_scheduler(client: TestClient) -> None:
     result = main.run_calendar_tick(datetime.fromisoformat("2026-09-20T18:20:00+02:00"))
     assert len(result.reminders) == 1
     assert callable(main.start_tick_scheduler)
+
+
+def test_patient_reminder_is_queued_for_voice(client: TestClient) -> None:
+    client.post("/v1/calendar-events", headers=HEADERS, json={
+        "title": "Pastilla por voz", "start_at": "2026-09-20T18:30:00+02:00",
+        "reminder_minutes_before": 15, "for_patient": True,
+    })
+    client.post("/v1/calendar-events", headers=HEADERS, json={
+        "title": "Aviso a la familia", "start_at": "2026-09-20T18:30:00+02:00",
+        "reminder_minutes_before": 15, "for_patient": False,
+    })
+    client.post("/v1/calendar-tick", headers=HEADERS, params={"at": "2026-09-20T18:20:00+02:00"})
+    queue = client.get("/v1/voice-reminders", headers=HEADERS).json()
+    assert len(queue) == 1
+    assert "Pastilla por voz" in queue[0]["message"]
+    assert client.get("/v1/voice-reminders", headers=HEADERS).json() == []
+    assert client.get("/v1/voice-reminders").status_code == 401

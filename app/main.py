@@ -304,6 +304,12 @@ class CalendarReminder(BaseModel):
     for_patient: bool = True
 
 
+class VoiceReminder(BaseModel):
+    event_id: UUID
+    message: str
+    created_at: datetime
+
+
 class CalendarTickResult(BaseModel):
     at: datetime
     reminders: list[CalendarReminder]
@@ -874,6 +880,10 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, keywords TEXT NOT NULL, description TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS voice_reminders (
+            id TEXT PRIMARY KEY, event_id TEXT NOT NULL, message TEXT NOT NULL,
+            created_at TEXT NOT NULL, spoken_at TEXT
+        )""")
         calendar_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(calendar_events)").fetchall()}
         for column, statement in (
             ("recurrence", "ALTER TABLE calendar_events ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'"),
@@ -1149,6 +1159,30 @@ class InMemoryRepository:
             )
             self.event_db.commit()
         return rule
+
+    def enqueue_voice_reminder(self, event_id: UUID, message: str) -> None:
+        with self.lock:
+            self.event_db.execute(
+                "INSERT INTO voice_reminders(id, event_id, message, created_at, spoken_at) "
+                "VALUES (?, ?, ?, ?, NULL)",
+                (str(uuid4()), str(event_id), message, now().isoformat()),
+            )
+            self.event_db.commit()
+
+    def take_voice_reminders(self) -> list[dict]:
+        with self.lock:
+            rows = self.event_db.execute(
+                "SELECT id, event_id, message, created_at FROM voice_reminders "
+                "WHERE spoken_at IS NULL ORDER BY created_at ASC LIMIT 20"
+            ).fetchall()
+            if rows:
+                stamp = now().isoformat()
+                self.event_db.executemany(
+                    "UPDATE voice_reminders SET spoken_at=? WHERE id=?",
+                    [(stamp, row["id"]) for row in rows],
+                )
+                self.event_db.commit()
+            return [dict(row) for row in rows]
 
     def list_family_alert_rules(self) -> list[dict]:
         rows = self.event_db.execute(
@@ -3829,6 +3863,8 @@ def run_calendar_tick(reference: Optional[datetime] = None) -> CalendarTickResul
         ))
         if not event.for_patient:
             dispatch_calendar_family_reminder(calendar_family_message(event))
+        else:
+            repository.enqueue_voice_reminder(event.id, message)
         next_start = next_calendar_occurrence(event, reference) if event.recurrence != "none" else None
         if next_start is not None:
             repository.calendar_events[event.id] = event.model_copy(
@@ -3846,6 +3882,15 @@ def calendar_tick(
 ) -> CalendarTickResult:
     require_auth(authorization)
     return run_calendar_tick(at)
+
+
+@app.get("/v1/voice-reminders", response_model=list[VoiceReminder])
+def list_voice_reminders(authorization: Optional[str] = Header(default=None)) -> list[VoiceReminder]:
+    require_auth(authorization)
+    return [
+        VoiceReminder(event_id=UUID(item["event_id"]), message=item["message"], created_at=item["created_at"])
+        for item in repository.take_voice_reminders()
+    ]
 
 
 def start_tick_scheduler(interval_seconds: int = 60) -> None:
