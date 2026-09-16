@@ -245,6 +245,10 @@ class CognitiveExerciseSummary(BaseModel):
     accuracy: float
 
 
+class CognitiveGenerationRequest(BaseModel):
+    count: int = Field(default=5, ge=1, le=20)
+
+
 class CalendarEventCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     category: str = Field(default="other", pattern="^(medication|routine|appointment|other)$")
@@ -3532,6 +3536,84 @@ def calendar_tick(
             ))
     repository.save_calendar_events()
     return CalendarTickResult(at=reference, reminders=reminders)
+
+
+def ensure_memory(summary: str, kind: str = "observation") -> Memory:
+    for memory in repository.memories.values():
+        if memory.summary.strip().casefold() == summary.strip().casefold():
+            return memory
+    memory = Memory(id=uuid4(), kind=kind, summary=summary, created_at=now())
+    repository.memories[memory.id] = memory
+    repository.save_memories()
+    return memory
+
+
+def build_cognitive_exercise(memory: Memory, category: str, question: str, expected: str) -> CognitiveExercise:
+    exercise = CognitiveExercise(
+        id=uuid4(), memory_id=memory.id, category=category, question=question,
+        expected_answer=expected, created_at=now(), status="pending",
+    )
+    repository.cognitive_exercises[exercise.id] = exercise
+    return exercise
+
+
+@app.post("/v1/cognitive-exercises/generate", response_model=list[CognitiveExercise], status_code=201)
+def generate_cognitive_exercises(
+    request: CognitiveGenerationRequest, authorization: Optional[str] = Header(default=None),
+) -> list[CognitiveExercise]:
+    require_auth(authorization)
+    conocidas = {
+        exercise.question.strip().casefold()
+        for exercise in repository.cognitive_exercises.values()
+    }
+    creados: list[CognitiveExercise] = []
+    profile = repository.get_patient_profile()
+    if profile:
+        if profile.preferred_name:
+            question = "¿Cómo te llamas?"
+            if question.casefold() not in conocidas:
+                creados.append(build_cognitive_exercise(
+                    ensure_memory(f"Se llama {profile.preferred_name}."),
+                    "orientation", question, profile.preferred_name,
+                ))
+        home = profile.home_address
+        if home and home.locality:
+            question = "¿En qué localidad vives?"
+            if question.casefold() not in conocidas:
+                creados.append(build_cognitive_exercise(
+                    ensure_memory(f"Vive en {home.locality}."),
+                    "orientation", question, home.locality,
+                ))
+        if profile.birth_year:
+            question = "¿En qué año naciste?"
+            if question.casefold() not in conocidas:
+                creados.append(build_cognitive_exercise(
+                    ensure_memory(f"Nació en {profile.birth_year}."),
+                    "orientation", question, str(profile.birth_year),
+                ))
+    for person in repository.people.values():
+        if len(creados) >= request.count:
+            break
+        relacion = (person.relationship or "").strip()
+        if not relacion:
+            continue
+        question = f"¿Cómo se llama tu {relacion}?"
+        if question.casefold() in conocidas:
+            continue
+        creados.append(build_cognitive_exercise(
+            ensure_memory(f"Su {relacion} se llama {person.display_name}."),
+            "naming", question, person.display_name,
+        ))
+    for memory in repository.memories.values():
+        if len(creados) >= request.count:
+            break
+        question = f"Cuéntame con tus palabras: {memory.summary}"
+        if question.casefold() in conocidas:
+            continue
+        creados.append(build_cognitive_exercise(memory, "recall", question, memory.summary))
+    creados = creados[: request.count]
+    repository.save_cognitive_exercises()
+    return creados
 
 
 class AcousticDetectionCreate(BaseModel):
