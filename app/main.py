@@ -2679,19 +2679,70 @@ FAMILY_ALERT_TOOL = {
 }
 
 
+FAMILY_AGENDA_TOOL = {
+    "type": "function",
+    "name": "crear_evento_agenda",
+    "description": (
+        "Crea un evento en la agenda de Faro (cita, rutina o medicacion) cuando el familiar lo "
+        "pida explicitamente. Indica el titulo y la fecha y hora de inicio en formato ISO 8601; "
+        "opcionalmente la categoria (medication, routine, appointment, other) y los minutos de "
+        "aviso previo."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "titulo": {"type": "string", "description": "Que es el evento, en una frase breve."},
+            "cuando": {"type": "string", "description": "Fecha y hora de inicio en ISO 8601 (p. ej. 2026-09-20T10:00:00+02:00)."},
+            "categoria": {"type": "string", "enum": ["medication", "routine", "appointment", "other"]},
+            "aviso_minutos": {"type": "integer", "description": "Minutos de aviso previo (por defecto 15)."},
+        },
+        "required": ["titulo", "cuando"],
+    },
+}
+
+
 def execute_family_tool(name: str, arguments: str) -> dict:
-    if name != "registrar_aviso":
-        return {"status": "error", "detail": "unknown tool"}
     try:
         args = json.loads(arguments or "{}")
     except json.JSONDecodeError:
         return {"status": "error", "detail": "invalid arguments"}
-    keywords = args.get("palabras_clave") or []
-    description = args.get("descripcion") or ""
-    if not isinstance(keywords, list) or not description:
-        return {"status": "error", "detail": "missing description or keywords"}
-    rule = repository.add_family_alert_rule([str(keyword) for keyword in keywords], str(description))
-    return {"status": "ok", "rule_id": rule["id"], "description": rule["description"], "keywords": rule["keywords"]}
+    if name == "registrar_aviso":
+        keywords = args.get("palabras_clave") or []
+        description = args.get("descripcion") or ""
+        if not isinstance(keywords, list) or not description:
+            return {"status": "error", "detail": "missing description or keywords"}
+        rule = repository.add_family_alert_rule([str(keyword) for keyword in keywords], str(description))
+        return {"status": "ok", "rule_id": rule["id"], "description": rule["description"], "keywords": rule["keywords"]}
+    if name == "crear_evento_agenda":
+        title = str(args.get("titulo") or "").strip()
+        start_raw = str(args.get("cuando") or "").strip()
+        if not title or not start_raw:
+            return {"status": "error", "detail": "missing title or start"}
+        try:
+            start_at = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        except ValueError:
+            return {"status": "error", "detail": "invalid start datetime"}
+        if start_at.tzinfo is None:
+            start_at = start_at.replace(tzinfo=family_zone())
+        category = str(args.get("categoria") or "other")
+        if category not in {"medication", "routine", "appointment", "other"}:
+            category = "other"
+        try:
+            reminder = int(args.get("aviso_minutos") or 15)
+        except (TypeError, ValueError):
+            reminder = 15
+        event = CalendarEvent(
+            id=uuid4(), title=title[:120], category=category, start_at=start_at,
+            duration_minutes=30, reminder_minutes_before=max(0, min(reminder, 1440)),
+            notes=None, for_patient=True, enabled=True, created_at=now(),
+        )
+        repository.calendar_events[event.id] = event
+        repository.save_calendar_events()
+        return {
+            "status": "ok", "event_id": str(event.id), "title": event.title,
+            "start_at": event.start_at.isoformat(), "category": event.category,
+        }
+    return {"status": "error", "detail": "unknown tool"}
 
 
 def openai_family_answer(
@@ -2757,7 +2808,10 @@ def openai_family_answer(
         "- Sé coherente con los mensajes anteriores de esta conversación y no te repitas.\n"
         "- Si el familiar pide que se le avise ante algo concreto (o confirma con un 'sí' una "
         "propuesta tuya de avisar), llama a la herramienta registrar_aviso con una descripción "
-        "breve y las palabras clave, y confírmale que el aviso queda activo por WhatsApp.\n\n"
+        "breve y las palabras clave, y confírmale que el aviso queda activo por WhatsApp.\n"
+        "- Si el familiar te pide anotar una cita, una rutina o un recordatorio de medicación "
+        "(con fecha y hora), llama a la herramienta crear_evento_agenda y confírmale el día y la "
+        "hora anotados.\n\n"
         "Registro de eventos del paciente:\n"
         f"{context}"
     )
@@ -2771,7 +2825,7 @@ def openai_family_answer(
             "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
             "instructions": instructions,
             "input": input_items,
-            "tools": [FAMILY_ALERT_TOOL],
+            "tools": [FAMILY_ALERT_TOOL, FAMILY_AGENDA_TOOL],
             "temperature": 0.2,
             "max_output_tokens": 500,
         }).encode("utf-8")
