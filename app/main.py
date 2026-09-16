@@ -249,6 +249,23 @@ class CognitiveGenerationRequest(BaseModel):
     count: int = Field(default=5, ge=1, le=20)
 
 
+class CognitiveEvolutionDay(BaseModel):
+    day: str
+    total: int
+    completed: int
+    correct: int
+
+
+class CognitiveEvolution(BaseModel):
+    days: int
+    total: int
+    completed: int
+    correct: int
+    accuracy: float
+    by_category: dict[str, int]
+    history: list[CognitiveEvolutionDay]
+
+
 class CalendarEventCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     category: str = Field(default="other", pattern="^(medication|routine|appointment|other)$")
@@ -3483,6 +3500,40 @@ def cognitive_exercise_summary(authorization: Optional[str] = Header(default=Non
     return CognitiveExerciseSummary(
         total=len(items), pending=len(items) - len(completed),
         completed=len(completed), correct=correct, accuracy=accuracy,
+    )
+
+
+@app.get("/v1/cognitive-exercises/evolution", response_model=CognitiveEvolution)
+def cognitive_exercise_evolution(
+    days: int = 30, authorization: Optional[str] = Header(default=None),
+) -> CognitiveEvolution:
+    """Evolucion del paciente para la auditoria de medico, cuidador o familiar."""
+    require_auth(authorization)
+    limite = now() - timedelta(days=max(1, min(days, 365)))
+    zone = family_zone()
+    items = [
+        exercise for exercise in repository.cognitive_exercises.values()
+        if exercise.created_at >= limite
+    ]
+    completados = [exercise for exercise in items if exercise.status == "completed"]
+    aciertos = sum(1 for exercise in completados if exercise.correct)
+    por_categoria: dict[str, int] = {}
+    historial: dict[str, CognitiveEvolutionDay] = {}
+    for exercise in items:
+        por_categoria[exercise.category] = por_categoria.get(exercise.category, 0) + 1
+        dia = exercise.created_at.astimezone(zone).strftime("%Y-%m-%d")
+        registro = historial.get(dia) or CognitiveEvolutionDay(day=dia, total=0, completed=0, correct=0)
+        registro.total += 1
+        if exercise.status == "completed":
+            registro.completed += 1
+            if exercise.correct:
+                registro.correct += 1
+        historial[dia] = registro
+    return CognitiveEvolution(
+        days=days, total=len(items), completed=len(completados), correct=aciertos,
+        accuracy=(round(aciertos / len(completados) * 100, 1) if completados else 0.0),
+        by_category=por_categoria,
+        history=[historial[dia] for dia in sorted(historial)],
     )
 
 
