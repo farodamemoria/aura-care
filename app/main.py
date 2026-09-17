@@ -801,6 +801,7 @@ class InMemoryRepository:
         self.reviews: dict[UUID, ReviewItem] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
         self.last_outcome: dict[str, datetime] = {}
+        self.last_glasses_not_worn: dict[str, datetime] = {}
         self.care_contacts: dict[UUID, CareContact] = {}
         self.emergency_alerts: dict[UUID, EmergencyAlert] = {}
         self.last_emergency_at: dict[str, datetime] = {}
@@ -3893,6 +3894,24 @@ def calendar_tick(
 ) -> CalendarTickResult:
     require_auth(authorization)
     return run_calendar_tick(at)
+
+
+GLASSES_NOT_WORN_DEDUP = timedelta(minutes=10)
+
+
+@app.post("/v1/glasses/not-worn")
+def glasses_not_worn(authorization: Optional[str] = Header(default=None)) -> dict:
+    require_auth(authorization)
+    last = repository.last_glasses_not_worn.get("default")
+    if last is not None and now() - last < GLASSES_NOT_WORN_DEDUP:
+        return {"status": "ignored"}
+    repository.last_glasses_not_worn["default"] = now()
+    repository.add_event(EventCreate(
+        kind="routine", source="glasses", severity="attention",
+        summary="El paciente no lleva las gafas puestas", metadata={"glasses_not_worn": True},
+    ))
+    repository.enqueue_voice_reminder(uuid4(), "Pon as gafas, por favor.")
+    return {"status": "reminded"}
 
 
 @app.get("/v1/voice-reminders", response_model=list[VoiceReminder])

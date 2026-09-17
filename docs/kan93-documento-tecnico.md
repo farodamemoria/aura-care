@@ -223,7 +223,7 @@ Agenda:
 
 - `POST /v1/calendar-events`, `GET /v1/calendar-events`,
   `PATCH /v1/calendar-events/{event_id}`, `DELETE /v1/calendar-events/{event_id}`,
-  `POST /v1/calendar-tick`, `GET /v1/voice-reminders`.
+  `POST /v1/calendar-tick`, `GET /v1/voice-reminders`, `POST /v1/glasses/not-worn`.
 
 Conversación familiar:
 
