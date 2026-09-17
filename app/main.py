@@ -37,6 +37,7 @@ from .environmental_listening import (
 
 CONFIDENCE_MINIMUM = 95.0
 CONFIDENCE_MEAN_MINIMUM = 97.0
+FACE_DETECTION_MINIMUM = 90.0
 CONSENSUS_MINIMUM = 2
 SAME_PERSON_COOLDOWN = timedelta(minutes=10)
 REVIEW_IMAGE_TTL = timedelta(hours=24)
@@ -754,6 +755,8 @@ class RekognitionFaceProvider:
             )
         except self.client.exceptions.InvalidParameterException as exc:
             raise NoFaceDetectedError from exc
+        if response.get("SearchedFaceConfidence", 0.0) < FACE_DETECTION_MINIMUM:
+            raise NoFaceDetectedError
         results = []
         for match in response.get("FaceMatches", []):
             external_id = match.get("Face", {}).get("ExternalImageId")
@@ -3336,7 +3339,10 @@ def recognize(request: Request, files: Annotated[list[UploadFile], File()], auth
     patient_frames = sum(1 for candidate in candidates if candidate.person_id == PATIENT_FACE_ID and candidate.confidence >= CONFIDENCE_MINIMUM)
     if patient_frames >= CONSENSUS_MINIMUM:
         return RecognitionResult(status="unknown", confidence=confidence, reason="Possible patient self-image; review suppressed")
-    review = ReviewItem(id=uuid4(), created_at=now(), status="pending", candidate_person_ids=list(dict.fromkeys(candidate.person_id for candidate in candidates if candidate.person_id in repository.people)), confidences=[candidate.confidence for candidate in candidates])
+    known_frames = [candidate for candidate in candidates if candidate.person_id in repository.people]
+    if known_frames:
+        return RecognitionResult(status="unknown", confidence=confidence, reason="Likely known person below consensus; review suppressed")
+    review = ReviewItem(id=uuid4(), created_at=now(), status="pending", candidate_person_ids=[], confidences=[candidate.confidence for candidate in candidates])
     repository.save_review(review)
     repository.save_review_image(review.id, images[0])
     return RecognitionResult(status="review_required", review_id=review.id, reason=reason)
