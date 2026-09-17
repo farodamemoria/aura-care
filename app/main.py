@@ -39,7 +39,7 @@ CONFIDENCE_MINIMUM = 95.0
 CONFIDENCE_MEAN_MINIMUM = 95.0
 FACE_DETECTION_MINIMUM = 90.0
 CONSENSUS_MINIMUM = 2
-SAME_PERSON_COOLDOWN = timedelta(minutes=10)
+SAME_PERSON_COOLDOWN = timedelta(minutes=15)
 REVIEW_COOLDOWN = timedelta(minutes=2)
 REVIEW_IMAGE_TTL = timedelta(hours=24)
 REVIEW_IMAGE_SUFFIX = ".bin"
@@ -3382,6 +3382,12 @@ def resolve_review(review_id: UUID, resolution: ReviewResolution, authorization:
         raise HTTPException(status_code=404, detail="Review not found")
     if resolution.person_id is not None:
         person_or_404(resolution.person_id)
+        evidence = repository.load_review_image(review_id)
+        if evidence:
+            try:
+                face_provider.enroll(resolution.person_id, [evidence])
+            except Exception:
+                pass
     updated = review.model_copy(update={"status": "resolved", "resolved_person_id": resolution.person_id})
     repository.save_review(updated)
     repository.delete_review_evidence(review_id)
