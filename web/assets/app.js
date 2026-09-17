@@ -20,10 +20,11 @@ async function load() {
   try {
     const health = await fetch('/health').then(response => response.json());
     document.querySelector('#connection').textContent = `Conectado · ${health.face_provider === 'RekognitionFaceProvider' ? 'reconocimiento activo' : 'modo de prueba'}`;
-    const [people, reviews, contacts, patient, events, tracking, exercises, exerciseSummary] = await Promise.all([
+    const [people, reviews, contacts, patient, events, tracking, exercises, exerciseSummary, evolution] = await Promise.all([
       api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
       api('/v1/events?limit=100'), api('/v1/location-sessions/active'),
       api('/v1/cognitive-exercises'), api('/v1/cognitive-exercises/summary'),
+      api('/v1/cognitive-exercises/evolution'),
     ]);
     const pending = reviews.filter(review => review.status === 'pending');
     document.querySelector('#people-count').textContent = people.length;
@@ -45,6 +46,7 @@ async function load() {
     renderEvents(events);
     renderTracking(tracking);
     renderExercises(exercises, exerciseSummary);
+    renderEvolution(evolution);
   } catch (error) {
     document.querySelector('#connection').textContent = 'Sin conexión';
     notify(error);
@@ -107,6 +109,23 @@ function renderTracking(session) {
   card.append(title, detail);
 }
 
+function renderEvolution(evolution) {
+  const target = document.querySelector('#evolution');
+  if (!target || !evolution) return;
+  const resumen = document.querySelector('#evolution-summary');
+  if (resumen) resumen.textContent = `Últimos ${evolution.days} días: ${evolution.total} momentos · ${evolution.completed} realizados · ${evolution.correct} aciertos (${evolution.accuracy} %).`;
+  const history = evolution.history || [];
+  const max = Math.max(1, ...history.map(item => item.total));
+  target.replaceChildren();
+  for (const item of history) {
+    const column = document.createElement('div');
+    column.className = 'timeline-column';
+    column.innerHTML = `<b>${item.total}</b><div class="timeline-track"><i style="height:${Math.max(8, item.total / max * 100)}%"></i></div><span>${new Date(item.day + 'T12:00:00').toLocaleDateString('es-ES', {day: '2-digit', month: 'short'})}</span>`;
+    column.title = `${item.total} momentos · ${item.completed} realizados · ${item.correct} aciertos`;
+    target.append(column);
+  }
+  if (!target.children.length) target.append(empty('Todavía no hay momentos registrados.'));
+}
 async function answerExercise(id, correct) {
   try {
     await api(`/v1/cognitive-exercises/${id}/answer`, {
