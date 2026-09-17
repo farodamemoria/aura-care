@@ -71,6 +71,15 @@ def test_unknown_face_creates_review(client: TestClient) -> None:
     assert len(main.repository.reviews) == 1
 
 
+def test_repeated_unknown_face_creates_only_one_review(client: TestClient) -> None:
+    main.face_provider = ScriptedProvider([[], [], [], [], [], []])
+    first = client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()
+    second = client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()
+    assert first["status"] == "review_required"
+    assert second["status"] == "unknown"
+    assert len(main.repository.reviews) == 1
+
+
 def test_non_human_frames_do_not_create_review(client: TestClient) -> None:
     main.face_provider = ScriptedProvider([main.NoFaceDetectedError()] * 3)
     body = client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()

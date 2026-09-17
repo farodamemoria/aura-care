@@ -36,10 +36,11 @@ from .environmental_listening import (
 )
 
 CONFIDENCE_MINIMUM = 95.0
-CONFIDENCE_MEAN_MINIMUM = 97.0
+CONFIDENCE_MEAN_MINIMUM = 95.0
 FACE_DETECTION_MINIMUM = 90.0
 CONSENSUS_MINIMUM = 2
 SAME_PERSON_COOLDOWN = timedelta(minutes=10)
+REVIEW_COOLDOWN = timedelta(minutes=2)
 REVIEW_IMAGE_TTL = timedelta(hours=24)
 REVIEW_IMAGE_SUFFIX = ".bin"
 
@@ -804,6 +805,7 @@ class InMemoryRepository:
         self.reviews: dict[UUID, ReviewItem] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
         self.last_outcome: dict[str, datetime] = {}
+        self.last_review_created: dict[str, datetime] = {}
         self.last_glasses_not_worn: dict[str, datetime] = {}
         self.care_contacts: dict[UUID, CareContact] = {}
         self.emergency_alerts: dict[UUID, EmergencyAlert] = {}
@@ -1586,7 +1588,7 @@ def decide(candidates: list[FaceCandidate]) -> tuple[Optional[UUID], Optional[fl
     scores = [candidate.confidence for candidate in eligible if candidate.person_id == person_id]
     mean = sum(scores) / len(scores)
     if count < CONSENSUS_MINIMUM or mean < CONFIDENCE_MEAN_MINIMUM:
-        return None, mean, "At least two agreeing frames and 97% mean confidence are required"
+        return None, mean, "At least two agreeing frames at 95% confidence are required"
     return person_id, mean, "Confirmed by conservative multi-frame consensus"
 
 
@@ -3342,6 +3344,10 @@ def recognize(request: Request, files: Annotated[list[UploadFile], File()], auth
     known_frames = [candidate for candidate in candidates if candidate.person_id in repository.people]
     if known_frames:
         return RecognitionResult(status="unknown", confidence=confidence, reason="Likely known person below consensus; review suppressed")
+    review_key = f"{actor}:review"
+    if repository.last_review_created.get(review_key, datetime.min.replace(tzinfo=timezone.utc)) > now() - REVIEW_COOLDOWN:
+        return RecognitionResult(status="unknown", confidence=confidence, reason="Recent pending review; duplicate suppressed")
+    repository.last_review_created[review_key] = now()
     review = ReviewItem(id=uuid4(), created_at=now(), status="pending", candidate_person_ids=[], confidences=[candidate.confidence for candidate in candidates])
     repository.save_review(review)
     repository.save_review_image(review.id, images[0])
