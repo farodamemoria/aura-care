@@ -30,7 +30,7 @@ class ScriptedProvider:
         return len(images)
 
     def search(self, image: bytes) -> list[main.FaceCandidate]:
-        outcome = self.per_frame.pop(0)
+        outcome = self.per_frame.pop(0) if len(self.per_frame) > 1 else self.per_frame[0]
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -100,6 +100,40 @@ def test_known_person_with_consensus_is_confirmed(client: TestClient) -> None:
     assert body["status"] == "confirmed"
     assert body["person"]["display_name"] == "Ana"
     assert main.repository.reviews == {}
+
+
+def test_known_person_is_announced_again_after_cooldown(client: TestClient) -> None:
+    main.face_provider = ScriptedProvider([[_match(99.0)]])
+    assert client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()["status"] == "confirmed"
+    assert client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()["status"] == "unknown"
+    main.repository.last_outcome = {
+        key: value - main.SAME_PERSON_COOLDOWN - main.timedelta(minutes=1)
+        for key, value in main.repository.last_outcome.items()
+    }
+    assert client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()["status"] == "confirmed"
+
+
+class RecordingProvider(ScriptedProvider):
+    def __init__(self, per_frame: list[object]) -> None:
+        super().__init__(per_frame)
+        self.enrolled: list[tuple[main.UUID, list[bytes]]] = []
+
+    def enroll(self, person_id: main.UUID, images: list[bytes]) -> int:
+        self.enrolled.append((person_id, list(images)))
+        return len(images)
+
+
+def test_resolving_review_with_person_enrolls_that_face(client: TestClient) -> None:
+    provider = RecordingProvider([[], [], []])
+    main.face_provider = provider
+    body = client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()
+    assert body["status"] == "review_required"
+    resolved = client.post(
+        f"/v1/reviews/{body['review_id']}/resolve", headers=HEADERS, json={"person_id": str(PERSON_ID)}
+    )
+    assert resolved.status_code == 200
+    assert provider.enrolled and provider.enrolled[0][0] == PERSON_ID
+    assert provider.enrolled[0][1] == [JPEG]
 
 
 class _InvalidParameter(Exception):
