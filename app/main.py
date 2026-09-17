@@ -1491,6 +1491,11 @@ def download_faro_movil_app() -> FileResponse:
     return _download_apk("faro-movil.apk", "Faro-Movil.apk")
 
 
+@app.get("/download/faro-puente.apk", include_in_schema=False)
+def download_faro_puente_app() -> FileResponse:
+    return _download_apk("faro-puente.apk", "Faro-Puente.apk")
+
+
 @app.get("/download/faro-familia.apk", include_in_schema=False)
 def download_faro_familia_app() -> FileResponse:
     return _download_apk("faro-familia.apk", "Faro-Familia.apk")

@@ -139,7 +139,8 @@ Portal y estáticos:
 - `GET /track/{share_token}` — página pública de seguimiento de una ubicación compartida.
 - `GET /.well-known/assetlinks.json` — enlace de la TWA de Faro Familia.
 - `GET /download/faro.apk`, `GET /download/camera-access.apk`,
-  `GET /download/faro-movil.apk`, `GET /download/faro-familia.apk` — descargas de las apps.
+  `GET /download/faro-movil.apk`, `GET /download/faro-familia.apk`,
+  `GET /download/faro-puente.apk` — descargas de las apps.
 
 Salud y versión:
 
