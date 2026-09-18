@@ -303,7 +303,7 @@ function renderExercises(exercises, summary) {
   for (const exercise of exercises.slice(0, 30)) {
     const article = document.createElement('article'), question = document.createElement('strong'),
       answer = document.createElement('small'), state = document.createElement('span');
-    article.className = 'person-card';
+    article.className = 'exercise-card';
     question.textContent = exercise.question;
     answer.textContent = `Respuesta esperada: ${exercise.expected_answer}`;
     state.textContent = exercise.status === 'completed'
@@ -311,11 +311,14 @@ function renderExercises(exercises, summary) {
       : 'Pendiente';
     article.append(question, answer, state);
     if (exercise.status !== 'completed') {
+      const actions = document.createElement('div');
+      actions.className = 'exercise-actions';
       const ok = document.createElement('button'); ok.className = 'primary'; ok.textContent = 'Acertó';
-      ok.addEventListener('click', () => { ok.disabled = true; answerExercise(exercise.id, true); });
+      ok.addEventListener('click', () => { ok.disabled = true; hard.disabled = true; answerExercise(exercise.id, true); });
       const hard = document.createElement('button'); hard.className = 'secondary'; hard.textContent = 'Le costó';
-      hard.addEventListener('click', () => { hard.disabled = true; answerExercise(exercise.id, false); });
-      article.append(ok, hard);
+      hard.addEventListener('click', () => { ok.disabled = true; hard.disabled = true; answerExercise(exercise.id, false); });
+      actions.append(ok, hard);
+      article.append(actions);
     }
     target.append(article);
   }
