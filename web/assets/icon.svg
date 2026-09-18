@@ -1,13 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Faro Familia">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0B4F6C"/>
-      <stop offset="1" stop-color="#062C3D"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <path d="M148 356V262a20 20 0 0 1 40 0v94Z" fill="#F6EAD9"/>
-  <path d="M236 356V226a20 20 0 0 1 40 0v130Z" fill="#A7D8F0"/>
-  <path d="M324 356V278a20 20 0 0 1 40 0v78Z" fill="#4CAF8A"/>
-  <circle cx="256" cy="176" r="20" fill="#F6EAD9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-label="Faro Familia">
+  <rect width="108" height="108" rx="24" fill="#17483A"/>
+  <path fill="#FFFFFF" fill-rule="evenodd" d="M32,54 a22,22 0 1,0 44,0 a22,22 0 1,0 -44,0 Z M46,54 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0 Z"/>
 </svg>
