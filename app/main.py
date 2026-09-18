@@ -47,14 +47,11 @@ REVIEW_IMAGE_SUFFIX = ".bin"
 
 def review_cipher() -> Fernet:
     """Cifra en reposo la evidencia visual de las revisiones (Fernet = AES + HMAC)."""
-    secret = (
-        os.getenv("AURA_REVIEW_SECRET")
-        or os.getenv("AURA_CREDENTIAL_PEPPER")
-        or "faro-review-development-secret"
-    )
+    secret = os.getenv("AURA_REVIEW_SECRET") or os.getenv("AURA_CREDENTIAL_PEPPER")
+    if not secret:
+        raise HTTPException(status_code=503, detail="Review encryption is not configured")
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
     return Fernet(key)
-LOCAL_TOKEN = "local-development-only"
 PATIENT_FACE_ID = UUID("00000000-0000-4000-8000-000000000001")
 MEMORY_STOP_WORDS = {
     "que", "como", "cuando", "donde", "quien", "para", "por", "con", "del", "las", "los",
@@ -1437,7 +1434,9 @@ API_VERSION = "2026-08-26-patient-self-recognition-v1"
 
 
 def require_auth(authorization: Optional[str]) -> str:
-    configured_token = os.getenv("AURA_LOCAL_TOKEN", LOCAL_TOKEN)
+    configured_token = os.getenv("AURA_LOCAL_TOKEN")
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="Authentication is not configured")
     scheme, separator, credential = (authorization or "").partition(" ")
     if (
         separator != " "
@@ -1451,7 +1450,9 @@ def require_auth(authorization: Optional[str]) -> str:
 
 def credential_hash(secret: str) -> str:
     """Hash bearer material with a server-side pepper; plaintext is never persisted."""
-    pepper = os.getenv("AURA_CREDENTIAL_PEPPER") or os.getenv("AURA_LOCAL_TOKEN", LOCAL_TOKEN)
+    pepper = os.getenv("AURA_CREDENTIAL_PEPPER") or os.getenv("AURA_LOCAL_TOKEN")
+    if not pepper:
+        raise HTTPException(status_code=503, detail="Credential hashing is not configured")
     return hmac.new(pepper.encode("utf-8"), secret.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
@@ -1564,6 +1565,22 @@ def person_or_404(person_id: UUID) -> Person:
 def read_images(files: list[UploadFile], required: int) -> list[bytes]:
     if len(files) != required:
         raise HTTPException(status_code=422, detail=f"Exactly {required} face images are required")
+    images = []
+    for file in files:
+        if file.content_type not in {"image/jpeg", "image/png"}:
+            raise HTTPException(status_code=415, detail="Only JPEG or PNG images are accepted")
+        data = file.file.read()
+        if not data or len(data) > 15_000_000:
+            raise HTTPException(status_code=422, detail="Each image must be between 1 byte and 15 MB")
+        images.append(data)
+    return images
+
+
+def read_face_images(files: list[UploadFile], minimum: int = 1, maximum: int = 5) -> list[bytes]:
+    if not minimum <= len(files) <= maximum:
+        raise HTTPException(
+            status_code=422, detail=f"Between {minimum} and {maximum} face images are required"
+        )
     images = []
     for file in files:
         if file.content_type not in {"image/jpeg", "image/png"}:
@@ -3273,9 +3290,10 @@ def get_person_face_sample(
 def enroll_face_samples(person_id: UUID, files: Annotated[list[UploadFile], File()], authorization: Optional[str] = Header(default=None)) -> Person:
     require_auth(authorization)
     person = person_or_404(person_id)
-    images = read_images(files, required=5)
+    images = read_face_images(files)
+    face_provider.delete(person_id)
     indexed = face_provider.enroll(person_id, images)
-    if indexed != 5:
+    if indexed < 1:
         face_provider.delete(person_id)
         raise HTTPException(status_code=422, detail="Each image must contain one usable face")
     photos_saved = repository.save_person_photos(person_id, images)
@@ -3381,9 +3399,9 @@ def resolve_review(review_id: UUID, resolution: ReviewResolution, authorization:
     if review is None:
         raise HTTPException(status_code=404, detail="Review not found")
     if resolution.person_id is not None:
-        person_or_404(resolution.person_id)
+        person = person_or_404(resolution.person_id)
         evidence = repository.load_review_image(review_id)
-        if evidence:
+        if evidence and person.consent_granted:
             try:
                 face_provider.enroll(resolution.person_id, [evidence])
             except Exception:

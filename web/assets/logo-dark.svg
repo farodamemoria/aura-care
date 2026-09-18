@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 76" role="img" aria-label="Faro Familia">
+  <g>
+    <rect x="2" y="8" width="60" height="60" rx="15" fill="#0B4F6C"/>
+    <path d="M20 52V38a5 5 0 0 1 10 0v14Z" fill="#F6EAD9"/>
+    <path d="M34 52V30a5 5 0 0 1 10 0v22Z" fill="#A7D8F0"/>
+    <path d="M48 52V40a5 5 0 0 1 10 0v12Z" fill="#4CAF8A"/>
+    <circle cx="32" cy="21" r="4" fill="#F6EAD9"/>
+  </g>
+  <text x="78" y="53" font-family="Montserrat, ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="600" letter-spacing="-0.5">
+    <tspan fill="#0B4F6C">faro</tspan><tspan fill="#4CAF8A">familia</tspan>
+  </text>
+</svg>
