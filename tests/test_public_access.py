@@ -1,8 +1,7 @@
-"""Public-access regression tests for the AURA Care portal.
+"""Auth regression tests for the AURA Care portal.
 
-After reverting KAN-31 (auth hardening), the portal must open without any
-authentication prompt: the frontend ships a default token and the backend
-accepts it. The bearer mechanism is kept so it can be locked down later.
+The backend refuses to serve protected data unless `AURA_LOCAL_TOKEN` is
+configured (fail-closed). The private portal ships a bearer token.
 """
 
 from __future__ import annotations
@@ -19,24 +18,35 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-DEFAULT_TOKEN = "local-development-only"
+TOKEN = "test-portal-token"
 
 
 @pytest.fixture()
-def client() -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("AURA_LOCAL_TOKEN", TOKEN)
     return TestClient(main.app)
 
 
-def test_default_token_opens_protected_endpoints(client: TestClient) -> None:
-    response = client.get("/v1/people", headers={"Authorization": f"Bearer {DEFAULT_TOKEN}"})
-    assert response.status_code == 200
+def test_configured_token_opens_protected_endpoints(client: TestClient) -> None:
+    assert client.get("/v1/people", headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 200
 
 
 def test_invalid_token_is_rejected(client: TestClient) -> None:
-    response = client.get("/v1/people", headers={"Authorization": "Bearer wrong-token"})
-    assert response.status_code == 401
+    assert client.get("/v1/people", headers={"Authorization": "Bearer wrong-token"}).status_code == 401
 
 
-def test_frontend_ships_default_token() -> None:
+def test_missing_token_is_rejected(client: TestClient) -> None:
+    assert client.get("/v1/people").status_code == 401
+
+
+def test_missing_configuration_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AURA_LOCAL_TOKEN", raising=False)
+    response = TestClient(main.app).get(
+        "/v1/people", headers={"Authorization": "Bearer anything"}
+    )
+    assert response.status_code == 503
+
+
+def test_frontend_ships_a_bearer_token() -> None:
     app_js = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
-    assert DEFAULT_TOKEN in app_js
+    assert "auraToken" in app_js

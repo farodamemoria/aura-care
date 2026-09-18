@@ -243,7 +243,7 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v31`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v32`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.
