@@ -2006,6 +2006,7 @@ def transcribe_audio(data: bytes, filename: str = "command.wav") -> Optional[str
         )
 
     add_field("model", os.getenv("AURA_TRANSCRIBE_MODEL", "whisper-1"))
+    add_field("language", os.getenv("AURA_TRANSCRIBE_LANGUAGE", "es"))
     parts.append(
         f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         "Content-Type: audio/wav\r\n\r\n".encode()
