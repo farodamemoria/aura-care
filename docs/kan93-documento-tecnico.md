@@ -104,6 +104,10 @@ pregunta de comprobación y escala solo si hay petición de ayuda, persistencia 
 Se expone por `POST /v1/acoustic-events`, `POST /v1/acoustic-events/response`,
 `POST /v1/acoustic-events/tick` y `GET /v1/acoustic-episodes`.
 
+La app envía además segmentos de voz de las gafas a `POST /v1/voice/intent`: el backend los
+transcribe con IA y, si el paciente dice que se ha perdido o está desorientado (español o gallego),
+avisa a la red de cuidados por WhatsApp.
+
 ### 2.5 Gestión de medicación
 
 Pautas por paciente (`medication_plans`: medicamento, dosis, horarios `HH:MM` y notas) y dosis

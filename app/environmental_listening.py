@@ -62,6 +62,25 @@ def is_help_request(text: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in HELP_PATTERNS)
 
 
+LOST_PATTERNS = (
+    r"\b(estoy|toy|estou)\s+(perdid[oa]|desorientad[oa])\b",
+    r"\b(perdid[oa]|desorientad[oa])\s+(estoy|toy|estou)\b",
+    r"\bno\s+(se|sei)\s+(donde|onde)\s+(estoy|estou)\b",
+    r"\bnon\s+sei\s+(onde|donde)\s+(estou|estoy)\b",
+    r"\b(me\s+)?(he\s+)?(perdid[oa]|perdin|perdinme|perdim)\b",
+    r"\bnon\s+atopo\s+(o\s+)?camin?o\b",
+    r"\bno\s+encuentro\s+(el\s+)?camin?o\b",
+    r"\bno\s+(se|sei)\s+volver\b",
+    r"\bnon\s+sei\s+volver\b",
+)
+
+
+def is_lost_request(text: str) -> bool:
+    """Detecta peticiones de ayuda por desorientación en español y gallego."""
+    normalized = normalize_text(text)
+    return any(re.search(pattern, normalized) for pattern in LOST_PATTERNS)
+
+
 @dataclass(frozen=True)
 class ListeningConfig:
     window: timedelta = timedelta(seconds=90)
