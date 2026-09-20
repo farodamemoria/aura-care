@@ -34,6 +34,7 @@ from .environmental_listening import (
     EnvironmentalListeningEngine,
     ListeningConfig,
     is_lost_request,
+    normalize_text,
 )
 
 CONFIDENCE_MINIMUM = 95.0
@@ -2044,25 +2045,31 @@ async def voice_intent(
     if not transcript:
         return VoiceIntentResult(matched=False, transcript="")
     matched = is_lost_request(transcript)
-    alert_status = None
+    normalized = normalize_text(transcript)
+    is_cough = bool(re.search(r"\b(cough\w*|tos|tose|toseu|tosido|tosida)\b", normalized))
+    if not matched and not is_cough:
+        return VoiceIntentResult(matched=False, transcript=transcript)
     if matched:
-        contacts = enabled_alert_contacts()
-        if contacts:
-            alert = EmergencyAlertCreate(
-                kind="lost",
-                spoken_message="Faro: o paciente di estar perdido ou desorientado.",
-                explicit_help_request=True,
-            )
-            deliveries, _ = send_alert_to_contacts(contacts, alert)
-            alert_status = "sent" if any(delivery.message_id for _, delivery in deliveries) else "test_mode"
-        else:
-            alert_status = "no_contact"
-        repository.add_event(EventCreate(
-            kind="help_request", summary=f"Petición de ayuda por voz: {transcript}",
-            source="glasses", severity="urgent",
-            metadata={"transcript": transcript, "delivery_status": alert_status},
-        ))
-    return VoiceIntentResult(matched=matched, transcript=transcript, alert_status=alert_status)
+        kind = "lost"
+        message = "Faro: o paciente di estar perdido ou desorientado."
+    else:
+        kind = "episode"
+        message = "Faro: detectáronse episodios de tos."
+    alert_status = None
+    contacts = enabled_alert_contacts()
+    if contacts:
+        alert = EmergencyAlertCreate(kind=kind, spoken_message=message, explicit_help_request=True)
+        deliveries, _ = send_alert_to_contacts(contacts, alert)
+        alert_status = "sent" if any(delivery.message_id for _, delivery in deliveries) else "test_mode"
+    else:
+        alert_status = "no_contact"
+    repository.add_event(EventCreate(
+        kind="help_request" if matched else "hazard",
+        summary=f"Petición de ayuda por voz: {transcript}",
+        source="glasses", severity="urgent",
+        metadata={"transcript": transcript, "delivery_status": alert_status},
+    ))
+    return VoiceIntentResult(matched=True, transcript=transcript, alert_status=alert_status)
 
 
 @app.get("/v1/emergency-alerts", response_model=list[EmergencyAlert])
