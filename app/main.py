@@ -2049,7 +2049,7 @@ async def voice_intent(
     matched = is_lost_request(transcript)
     normalized = normalize_text(transcript)
     is_cough = bool(re.search(r"\b(cof+|cough\w*|tos|tose|toseu|tosido|tosida)\b", normalized))
-    if not matched and not is_cough and not (peak >= 7000 and loud_ms <= 350):
+    if not matched and not is_cough and not (peak >= 4000 and loud_ms <= 350):
         return VoiceIntentResult(matched=False, transcript=transcript)
     if matched:
         kind = "lost"
