@@ -24,7 +24,7 @@ import calendar
 import threading
 import logging
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -2031,6 +2031,7 @@ def transcribe_audio(data: bytes, filename: str = "command.wav") -> Optional[str
 @app.post("/v1/voice/intent", response_model=VoiceIntentResult)
 async def voice_intent(
     audio: Annotated[UploadFile, File()],
+    peak: Annotated[float, Form()] = 0.0,
     authorization: Optional[str] = Header(default=None),
 ) -> VoiceIntentResult:
     """Recibe audio de las gafas, lo transcribe y avisa si el paciente se ha perdido."""
@@ -2046,15 +2047,18 @@ async def voice_intent(
         return VoiceIntentResult(matched=False, transcript="")
     matched = is_lost_request(transcript)
     normalized = normalize_text(transcript)
-    is_cough = bool(re.search(r"\b(cough\w*|tos|tose|toseu|tosido|tosida)\b", normalized))
-    if not matched and not is_cough:
+    is_cough = bool(re.search(r"\b(cof+|cough\w*|tos|tose|toseu|tosido|tosida)\b", normalized))
+    if not matched and not is_cough and peak < 9000:
         return VoiceIntentResult(matched=False, transcript=transcript)
     if matched:
         kind = "lost"
         message = "Faro: o paciente di estar perdido ou desorientado."
-    else:
+    elif is_cough:
         kind = "episode"
         message = "Faro: detectáronse episodios de tos."
+    else:
+        kind = "hazard"
+        message = "Faro: posible caída ou golpe forte detectado."
     alert_status = None
     contacts = enabled_alert_contacts()
     if contacts:
