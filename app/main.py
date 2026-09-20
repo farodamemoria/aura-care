@@ -33,14 +33,16 @@ from .environmental_listening import (
     ACOUSTIC_SIGNAL_LABELS,
     EnvironmentalListeningEngine,
     ListeningConfig,
+    is_lost_request,
 )
 
 CONFIDENCE_MINIMUM = 95.0
 CONFIDENCE_MEAN_MINIMUM = 95.0
 FACE_DETECTION_MINIMUM = 90.0
 CONSENSUS_MINIMUM = 2
-SAME_PERSON_COOLDOWN = timedelta(minutes=15)
+SAME_PERSON_COOLDOWN = timedelta(seconds=int(os.getenv("AURA_SAME_PERSON_COOLDOWN_SECONDS", "900")))
 REVIEW_COOLDOWN = timedelta(minutes=2)
+EMERGENCY_ALERT_COOLDOWN = timedelta(seconds=int(os.getenv("AURA_EMERGENCY_ALERT_COOLDOWN_SECONDS", "120")))
 REVIEW_IMAGE_TTL = timedelta(hours=24)
 REVIEW_IMAGE_SUFFIX = ".bin"
 
@@ -1947,7 +1949,7 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
         raise HTTPException(status_code=409, detail="No family WhatsApp contact is configured")
     deduplication_key = f"{actor}:{request.kind}"
     previous = repository.last_emergency_at.get(deduplication_key)
-    if previous and previous > now() - timedelta(minutes=2):
+    if previous and previous > now() - EMERGENCY_ALERT_COOLDOWN:
         raise HTTPException(status_code=409, detail="A similar alert was already created recently")
     repository.last_emergency_at[deduplication_key] = now()
     alert_request = EmergencyAlertCreate.model_validate(request.model_dump(exclude={
@@ -1982,6 +1984,84 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
                   "recipient_failures": len(failures)},
     ))
     return alert
+
+
+class VoiceIntentResult(BaseModel):
+    matched: bool
+    transcript: str
+    alert_status: Optional[str] = None
+
+
+def transcribe_audio(data: bytes, filename: str = "command.wav") -> Optional[str]:
+    """Transcribe a short glasses-audio clip with OpenAI (es/gl) using multipart."""
+    api_key = os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    boundary = "----faro" + uuid4().hex
+    parts: list[bytes] = []
+
+    def add_field(name: str, value: str) -> None:
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+        )
+
+    add_field("model", os.getenv("AURA_TRANSCRIBE_MODEL", "whisper-1"))
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: audio/wav\r\n\r\n".encode()
+    )
+    parts.append(data)
+    parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/audio/transcriptions",
+        data=b"".join(parts),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8")).get("text")
+
+
+@app.post("/v1/voice/intent", response_model=VoiceIntentResult)
+async def voice_intent(
+    audio: Annotated[UploadFile, File()],
+    authorization: Optional[str] = Header(default=None),
+) -> VoiceIntentResult:
+    """Recibe audio de las gafas, lo transcribe y avisa si el paciente se ha perdido."""
+    require_auth(authorization)
+    data = await audio.read()
+    if not data or len(data) > 6_000_000:
+        raise HTTPException(status_code=422, detail="Invalid audio clip")
+    try:
+        transcript = transcribe_audio(data, audio.filename or "command.wav")
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
+        transcript = None
+    if not transcript:
+        return VoiceIntentResult(matched=False, transcript="")
+    matched = is_lost_request(transcript)
+    alert_status = None
+    if matched:
+        contacts = enabled_alert_contacts()
+        if contacts:
+            alert = EmergencyAlertCreate(
+                kind="lost",
+                spoken_message="Faro: o paciente di estar perdido ou desorientado.",
+                explicit_help_request=True,
+            )
+            deliveries, _ = send_alert_to_contacts(contacts, alert)
+            alert_status = "sent" if any(delivery.message_id for _, delivery in deliveries) else "test_mode"
+        else:
+            alert_status = "no_contact"
+        repository.add_event(EventCreate(
+            kind="help_request", summary=f"Petición de ayuda por voz: {transcript}",
+            source="glasses", severity="urgent",
+            metadata={"transcript": transcript, "delivery_status": alert_status},
+        ))
+    return VoiceIntentResult(matched=matched, transcript=transcript, alert_status=alert_status)
 
 
 @app.get("/v1/emergency-alerts", response_model=list[EmergencyAlert])
