@@ -193,6 +193,8 @@ Avisos:
 - `POST /v1/emergency-alerts`, `GET /v1/emergency-alerts`, `POST /v1/alerts/test`,
   `GET /v1/whatsapp/webhook`, `POST /v1/whatsapp/webhook`, `GET /v1/whatsapp/statuses`,
   `POST /v1/protective-observations`.
+- Demos: `POST /v1/admin/reset-cooldowns` limpia los anti-repetición en memoria (reconocimiento,
+  revisiones y avisos) para poder repetir un anuncio sin esperar.
 
 Ubicación:
 

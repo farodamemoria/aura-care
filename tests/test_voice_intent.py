@@ -69,3 +69,12 @@ def test_voice_intent_ignores_neutral_speech(client: TestClient, monkeypatch: py
 def test_voice_intent_requires_auth(client: TestClient) -> None:
     response = client.post("/v1/voice/intent", files={"audio": ("command.wav", WAV, "audio/wav")})
     assert response.status_code == 401
+
+
+def test_reset_cooldowns_clears_recognition_state(client: TestClient) -> None:
+    main.repository.last_outcome["local-care-circle:person:x"] = main.now()
+    response = client.post("/v1/admin/reset-cooldowns", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["cleared"] == 1
+    assert main.repository.last_outcome == {}
+    assert client.post("/v1/admin/reset-cooldowns").status_code == 401

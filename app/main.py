@@ -2083,6 +2083,20 @@ def list_emergency_alerts(authorization: Optional[str] = Header(default=None)) -
     return sorted(repository.emergency_alerts.values(), key=lambda item: item.created_at, reverse=True)
 
 
+@app.post("/v1/admin/reset-cooldowns")
+def reset_cooldowns(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Limpia los anti-repetición en memoria (reconocimiento, revisiones y avisos).
+
+    Pensado para demos/pruebas: permite volver a anunciar a la misma persona sin esperar.
+    """
+    require_auth(authorization)
+    cleared = len(repository.last_outcome)
+    repository.last_outcome.clear()
+    repository.last_review_created.clear()
+    repository.last_emergency_at.clear()
+    return {"status": "ok", "cleared": cleared}
+
+
 @app.post("/v1/alerts/test")
 def test_family_alert(authorization: Optional[str] = Header(default=None)) -> dict:
     """Send a test WhatsApp alert to the care network and report the provider result."""
