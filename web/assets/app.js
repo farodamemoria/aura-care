@@ -411,6 +411,13 @@ function renderCareContacts(contacts, people) {
     name.textContent = contact.display_name;
     role.textContent = contact.role === 'caregiver' ? 'Cuidador' : 'Familiar';
     const linked = people.find(person => person.id === contact.known_person_id);
+    const avatar = document.createElement('div'); avatar.className = 'avatar'; avatar.textContent = (contact.display_name || '?').charAt(0).toUpperCase(); item.append(avatar);
+    if (linked) {
+      fetch(`/v1/people/${linked.id}/profile-photo`, {headers: authHeaders})
+        .then(response => { if (!response.ok) throw new Error(); return response.blob(); })
+        .then(blob => { const url = URL.createObjectURL(blob); const image = document.createElement('img'); image.className = 'person-photo'; image.alt = linked.display_name; image.src = url; image.onload = () => URL.revokeObjectURL(url); avatar.replaceWith(image); })
+        .catch(() => {});
+    }
     phone.textContent = `${contact.phone_e164} · prioridad ${contact.priority} · ${contact.alerts_enabled ? 'recibe alertas' : 'alertas pausadas'}${linked ? ` · vinculada con ${linked.display_name}` : ''}`;
     actions.className = 'care-actions'; edit.className = 'secondary'; edit.textContent = 'Editar ficha';
     pause.className = 'secondary'; pause.textContent = contact.alerts_enabled ? 'Pausar alertas' : 'Activar alertas';
