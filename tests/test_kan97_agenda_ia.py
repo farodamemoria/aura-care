@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,7 @@ import app.main as main  # noqa: E402
 
 TOKEN = "integration-agenda-ia-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
-INICIO = "2026-09-20T18:30:00+02:00"
+INICIO = (datetime.now(timezone.utc) + timedelta(days=2)).replace(hour=18, minute=30, second=0, microsecond=0).isoformat()
 
 
 class _FakeResponse:
