@@ -441,6 +441,9 @@ class EmergencyAlertCreate(BaseModel):
     explicit_help_request: bool
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    location_accuracy_meters: Optional[float] = Field(default=None, ge=0, le=10000)
+    location_source: Optional[str] = Field(default=None, pattern="^(gps|network|last_known)$")
+    location_recorded_at: Optional[datetime] = None
     tracking_url: Optional[str] = Field(default=None, max_length=500)
 
 
@@ -455,6 +458,54 @@ class EmergencyAlert(EmergencyAlertCreate):
     created_at: datetime
     delivery_status: str
     provider_message_id: Optional[str] = None
+
+
+LOCATION_APPROXIMATE_METERS = 50.0
+LOCATION_REFRESH_AFTER = timedelta(seconds=90)
+LOCATION_STALE_AFTER = timedelta(minutes=10)
+LOCATION_MAX_AGE = timedelta(minutes=30)
+
+
+def location_age_minutes(recorded_at: Optional[datetime], reference: Optional[datetime] = None) -> int:
+    reference = reference or now()
+    if recorded_at is None:
+        return 0
+    return max(0, int((reference - recorded_at).total_seconds() // 60))
+
+
+def build_alert_message(alert: EmergencyAlertCreate, reference: Optional[datetime] = None) -> str:
+    reference = reference or now()
+    location = ""
+    if alert.latitude is not None and alert.longitude is not None:
+        location = f" https://maps.google.com/?q={alert.latitude},{alert.longitude}"
+        age_minutes = location_age_minutes(alert.location_recorded_at, reference)
+        stale_minutes = int(LOCATION_STALE_AFTER.total_seconds() // 60)
+        if age_minutes >= stale_minutes:
+            location += f" (última posición conocida, hace {age_minutes} min)"
+        elif alert.location_accuracy_meters is not None:
+            quality = "precisión aproximada" if alert.location_accuracy_meters > LOCATION_APPROXIMATE_METERS else "precisión"
+            source = f", {alert.location_source}" if alert.location_source else ""
+            location += f" ({quality}: ±{round(alert.location_accuracy_meters)} m{source})"
+        elif alert.location_source:
+            location += f" ({alert.location_source})"
+    if alert.tracking_url:
+        location += f" Seguimiento: {alert.tracking_url}"
+    return f"Alerta de Faro da Memoria. Tipo: {alert.kind}. {alert.spoken_message}{location}"
+
+
+def prefer_location(new: LocationPoint, current: Optional[LocationPoint]) -> bool:
+    """True si la lectura nueva mejora o refresca la posición ya guardada."""
+    if current is None:
+        return True
+    new_at = new.recorded_at or now()
+    current_at = current.recorded_at or now()
+    if new_at < current_at - LOCATION_REFRESH_AFTER:
+        return False
+    if (new.accuracy_meters is not None and current.accuracy_meters is not None
+            and new.accuracy_meters > current.accuracy_meters
+            and new_at - current_at < LOCATION_REFRESH_AFTER):
+        return False
+    return True
 
 
 class EventCreate(BaseModel):
@@ -510,6 +561,7 @@ class LocationPoint(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     accuracy_meters: Optional[float] = Field(default=None, ge=0, le=10000)
+    source: Optional[str] = Field(default=None, pattern="^(gps|network|last_known)$")
     battery_percent: Optional[int] = Field(default=None, ge=0, le=100)
     recorded_at: Optional[datetime] = None
 
@@ -650,12 +702,7 @@ class MetaWhatsAppProvider:
         return media_id
 
     def send(self, contact: CareContact, alert: EmergencyAlertCreate, image: Optional[bytes] = None) -> AlertDelivery:
-        location = ""
-        if alert.latitude is not None and alert.longitude is not None:
-            location = f" https://maps.google.com/?q={alert.latitude},{alert.longitude}"
-        if alert.tracking_url:
-            location += f" Seguimiento: {alert.tracking_url}"
-        message = f"Alerta de Faro da Memoria. Tipo: {alert.kind}. {alert.spoken_message}{location}"
+        message = build_alert_message(alert)
         text_payload = json.dumps({
             "messaging_product": "whatsapp",
             "to": contact.phone_e164.removeprefix("+"),
@@ -1980,6 +2027,13 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
         metadata={"alert_id": str(alert.id), "delivery_status": delivery_status,
                   "photo_delivery_status": photo_status,
                   "location_included": request.latitude is not None and request.longitude is not None,
+                  "location_approximate": request.latitude is not None and (
+                      request.location_accuracy_meters is None
+                      or request.location_accuracy_meters > LOCATION_APPROXIMATE_METERS),
+                  "location_accuracy_meters": request.location_accuracy_meters,
+                  "location_source": request.location_source,
+                  "location_recorded_at": (request.location_recorded_at.isoformat()
+                                           if request.location_recorded_at else None),
                   "recipients_attempted": len(contacts), "recipients_delivered": len(deliveries),
                   "recipient_roles": ",".join(contact.role for contact, _ in deliveries),
                   "recipient_failures": len(failures)},
@@ -2209,6 +2263,8 @@ def update_location_session(
     if session.status != "active":
         raise HTTPException(status_code=409, detail="Location session is no longer active")
     normalized = point.model_copy(update={"recorded_at": point.recorded_at or now()})
+    if not prefer_location(normalized, session.last_location):
+        return session
     session = session.model_copy(update={"last_location": normalized})
     repository.location_sessions[session.id] = session
     repository.save_location_sessions()
@@ -2390,7 +2446,7 @@ def active_alert_location() -> tuple[Optional[LocationPoint], Optional[str]]:
     session = active[0]
     point = session.last_location
     recorded_at = point.recorded_at or session.created_at
-    if recorded_at < now() - timedelta(minutes=2):
+    if recorded_at < now() - LOCATION_MAX_AGE:
         return None, None
     public_base = os.getenv("AURA_PUBLIC_BASE_URL", "https://d2n7ih9kfxbzvd.cloudfront.net").rstrip("/")
     return point, f"{public_base}/track/{session.share_token}"
@@ -2497,6 +2553,9 @@ def record_protective_observation(
                 kind="hazard", spoken_message=request.description, explicit_help_request=False,
                 latitude=location.latitude if location else None,
                 longitude=location.longitude if location else None,
+                location_accuracy_meters=location.accuracy_meters if location else None,
+                location_source=location.source if location else None,
+                location_recorded_at=location.recorded_at if location else None,
                 tracking_url=tracking_url,
             ), image=evidence)
             notified_contact = ",".join(str(contact.id) for contact, _ in deliveries) or None
@@ -2514,7 +2573,12 @@ def record_protective_observation(
         metadata={"hazard": request.kind, "confidence": request.confidence,
                   "observations": len(reliable), "family_alert_status": family_alert_status,
                   "notified_contact_id": notified_contact, "photo_delivery_status": photo_delivery_status,
-                  "location_included": location_included},
+                  "location_included": location_included,
+                  "location_accuracy_meters": location.accuracy_meters if location else None,
+                  "location_source": location.source if location else None,
+                  "location_approximate": location is not None and (
+                      location.accuracy_meters is None
+                      or location.accuracy_meters > LOCATION_APPROXIMATE_METERS)},
     ))
     return ProtectiveObservationDecision(
         action=action, message=message, consecutive_observations=len(reliable),
@@ -2536,7 +2600,7 @@ h1{{font:500 34px Georgia;margin:5px 0}}.mark{{color:#2d7258;font-weight:700}}#m
 .meta{{color:#64736d}}.dot{{display:inline-block;width:9px;height:9px;border-radius:50%;background:#4fc27b;margin-right:7px}}
 </style></head><body><main><span class="mark">Faro Familia</span><h1>Ubicación compartida</h1>
 <p><span class="dot"></span><span id="state">Buscando la ubicación más reciente…</span></p><a id="map" hidden>Abrir en Google Maps</a><p id="details" class="meta"></p><p class="meta">Este enlace temporal se actualiza automáticamente y deja de funcionar al finalizar el seguimiento.</p></main>
-<script>const token={json.dumps(share_token)};async function update(){{try{{const r=await fetch('/v1/location-share/'+token);if(!r.ok)throw new Error(r.status===410?'El seguimiento ha finalizado':'Ubicación no disponible');const s=await r.json(),p=s.last_location;if(!p){{state.textContent='Esperando la primera ubicación…';return}}state.textContent=s.status==='active'?'Seguimiento activo':'Seguimiento detenido';map.href=`https://maps.google.com/?q=${{p.latitude}},${{p.longitude}}`;map.hidden=false;details.textContent=`Actualizada: ${{new Date(p.recorded_at).toLocaleString()}} · Precisión aproximada: ${{Math.round(p.accuracy_meters||0)}} m${{p.battery_percent==null?'':` · Batería: ${{p.battery_percent}}%`}}`}}catch(e){{state.textContent=e.message;map.hidden=true}}}}update();setInterval(update,10000)</script></body></html>""")
+<script>const token={json.dumps(share_token)},APPROX={int(LOCATION_APPROXIMATE_METERS)};async function update(){{try{{const r=await fetch('/v1/location-share/'+token);if(!r.ok)throw new Error(r.status===410?'El seguimiento ha finalizado':'Ubicación no disponible');const s=await r.json(),p=s.last_location;if(!p){{state.textContent='Esperando la primera ubicación…';return}}state.textContent=s.status==='active'?'Seguimiento activo':'Seguimiento detenido';map.href=`https://maps.google.com/?q=${{p.latitude}},${{p.longitude}}`;map.hidden=false;const mins=p.recorded_at?Math.max(0,Math.round((Date.now()-new Date(p.recorded_at).getTime())/60000)):0;details.textContent=[mins>=10?'Última posición conocida hace '+mins+' min':'',p.accuracy_meters==null?'':'precisión '+(p.accuracy_meters>APPROX?'aproximada':'precisa')+': ±'+Math.round(p.accuracy_meters)+' m'+(p.source?' ('+p.source+')':''),p.battery_percent==null?'':'batería: '+p.battery_percent+'%'].filter(Boolean).join(' · ')}}catch(e){{state.textContent=e.message;map.hidden=true}}}}update();setInterval(update,10000)</script></body></html>""")
 
 
 @app.post("/v1/events", response_model=Event, status_code=201)
