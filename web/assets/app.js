@@ -107,8 +107,6 @@ async function load() {
   document.querySelector('#review-count').textContent = pending.length;
   document.querySelector('#contact-count').textContent = contacts.length;
   setBadge('#review-badge', pending.length);
-  setBadge('#patient-badge', patient ? 0 : 1);
-  setBadge('#people-badge', people.filter(person => !person.enrollment_complete).length);
   setBadge('#care-badge', contacts.filter(contact => !contact.alerts_enabled).length);
   setBadge('#memory-badge', events.filter(event => event.severity === 'urgent' || event.severity === 'attention').length);
   setBadge('#exercises-badge', exercises.filter(exercise => exercise.status !== 'completed').length);
