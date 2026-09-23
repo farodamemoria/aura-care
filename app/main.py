@@ -723,6 +723,9 @@ class MetaWhatsAppProvider:
 
     def send(self, contact: CareContact, alert: EmergencyAlertCreate, image: Optional[bytes] = None) -> AlertDelivery:
         message = build_alert_message(alert)
+        location = ""
+        if alert.latitude is not None and alert.longitude is not None:
+            location = f" https://maps.google.com/?q={alert.latitude},{alert.longitude}"
         text_payload = json.dumps({
             "messaging_product": "whatsapp",
             "to": contact.phone_e164.removeprefix("+"),
@@ -1571,6 +1574,8 @@ def send_alert_to_contacts(
             deliveries.append((contact, alert_provider.send(contact, alert, image=image)))
         except RuntimeError as error:
             failures.append(f"{contact.display_name}:{error}")
+        except Exception as error:  # noqa: BLE001 - un fallo de un contacto no debe tumbar el tick
+            failures.append(f"{contact.display_name}:{type(error).__name__}:{error}")
     return deliveries, failures
 
 
@@ -4249,7 +4254,7 @@ def list_voice_reminders(authorization: Optional[str] = Header(default=None)) ->
     ]
 
 
-def start_tick_scheduler(interval_seconds: int = 60) -> None:
+def start_tick_scheduler(interval_seconds: int = 20) -> None:
     """Hilo que ejecuta los ticks periódicamente para que los avisos actúen solos."""
 
     def loop() -> None:
@@ -4270,9 +4275,9 @@ def _start_tick_scheduler() -> None:
     if os.getenv("AURA_TICK_SCHEDULER", "1").lower() in {"0", "false", "no", "off"}:
         return
     try:
-        interval = int(os.getenv("AURA_TICK_INTERVAL_SECONDS", "60"))
+        interval = int(os.getenv("AURA_TICK_INTERVAL_SECONDS", "20"))
     except ValueError:
-        interval = 60
+        interval = 20
     start_tick_scheduler(interval)
 
 
