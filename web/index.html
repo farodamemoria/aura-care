@@ -49,13 +49,13 @@
       <article><strong id="contact-count">0</strong><span>contactos preparados</span></article>
     </section>
     <nav class="tabs" aria-label="Secciones" role="tablist">
-      <button id="tab-patient" class="tab active" role="tab" aria-selected="true" aria-controls="patient-view" data-view="patient-view">Paciente</button>
-      <button id="tab-people" class="tab" role="tab" aria-selected="false" aria-controls="people-view" data-view="people-view">Personas conocidas</button>
+      <button id="tab-patient" class="tab active" role="tab" aria-selected="true" aria-controls="patient-view" data-view="patient-view">Paciente <span id="patient-badge" class="badge" hidden></span></button>
+      <button id="tab-people" class="tab" role="tab" aria-selected="false" aria-controls="people-view" data-view="people-view">Personas conocidas <span id="people-badge" class="badge" hidden></span></button>
       <button id="tab-reviews" class="tab" role="tab" aria-selected="false" aria-controls="reviews-view" data-view="reviews-view">Por aclarar <span id="review-badge" class="badge" hidden></span></button>
-      <button id="tab-care" class="tab" role="tab" aria-selected="false" aria-controls="care-view" data-view="care-view">Cuidados</button>
-      <button id="tab-memory" class="tab" role="tab" aria-selected="false" aria-controls="memory-view" data-view="memory-view">Memoria</button>
-      <button id="tab-exercises" class="tab" role="tab" aria-selected="false" aria-controls="exercises-view" data-view="exercises-view">Ejercicios</button>
-      <button id="tab-agenda" class="tab" role="tab" aria-selected="false" aria-controls="agenda-view" data-view="agenda-view">Agenda</button>
+      <button id="tab-care" class="tab" role="tab" aria-selected="false" aria-controls="care-view" data-view="care-view">Cuidados <span id="care-badge" class="badge" hidden></span></button>
+      <button id="tab-memory" class="tab" role="tab" aria-selected="false" aria-controls="memory-view" data-view="memory-view">Memoria <span id="memory-badge" class="badge" hidden></span></button>
+      <button id="tab-exercises" class="tab" role="tab" aria-selected="false" aria-controls="exercises-view" data-view="exercises-view">Ejercicios <span id="exercises-badge" class="badge" hidden></span></button>
+      <button id="tab-agenda" class="tab" role="tab" aria-selected="false" aria-controls="agenda-view" data-view="agenda-view">Agenda <span id="agenda-badge" class="badge" hidden></span></button>
     </nav>
     <section id="patient-view" class="view active" role="tabpanel" aria-labelledby="tab-patient" tabindex="-1">
       <div class="section-heading"><div><span class="kicker">Quien usa las gafas</span><h2>Ficha del paciente</h2><p>Información propia de la persona a la que acompaña Faro. No se mezcla con familiares, cuidadores ni personas reconocidas.</p></div></div>
@@ -226,6 +226,6 @@
       </div>
     </div>
   </dialog>
-  <script src="/assets/app.js?v=28" defer></script>
+  <script src="/assets/app.js?v=29" defer></script>
 </body>
 </html>
