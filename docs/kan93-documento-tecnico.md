@@ -133,6 +133,10 @@ esperada y su memoria de origen; `POST /v1/cognitive-exercises/{exercise_id}/ans
 resultado y `GET /v1/cognitive-exercises/summary` devuelve realizados, acertados y precisión. El
 portal incluye la pestaña **Ejercicios** para verlos y marcarlos.
 
+Además, se pueden **programar** ejercicios con texto libre y hora (`POST /v1/cognitive-exercises/scheduled`);
+`POST /v1/cognitive-exercises/tick` (y el planificador) los pregunta por voz al paciente a su hora, y
+`GET /v1/cognitive-exercises/report?period=daily|weekly|monthly` devuelve el informe del periodo.
+
 ### 2.8 Agenda y recordatorios
 
 Agenda del paciente y la familia (`calendar_events`: título, categoría `medication`/`routine`/
@@ -249,7 +253,7 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v34`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v35`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.

@@ -17,7 +17,7 @@ import app.main as main  # noqa: E402
 
 TOKEN = "integration-agenda-ia-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
-INICIO = "2026-09-20T18:30:00+02:00"
+INICIO = "2027-09-20T18:30:00+02:00"
 
 
 class _FakeResponse:

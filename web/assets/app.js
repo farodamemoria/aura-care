@@ -306,23 +306,69 @@ function renderExercises(exercises, summary) {
     article.className = 'exercise-card';
     question.textContent = exercise.question;
     answer.textContent = `Respuesta esperada: ${exercise.expected_answer}`;
+    const when = exercise.scheduled_at ? ` · programado ${new Date(exercise.scheduled_at).toLocaleString()}` : '';
     state.textContent = exercise.status === 'completed'
       ? (exercise.correct ? 'Resultado: correcto' : 'Resultado: con dificultad')
-      : 'Pendiente';
+      : `Pendiente${when}`;
     article.append(question, answer, state);
     if (exercise.status !== 'completed') {
       const actions = document.createElement('div');
       actions.className = 'exercise-actions';
-      const ok = document.createElement('button'); ok.className = 'primary'; ok.textContent = 'Acertó';
-      ok.addEventListener('click', () => { ok.disabled = true; hard.disabled = true; answerExercise(exercise.id, true); });
-      const hard = document.createElement('button'); hard.className = 'secondary'; hard.textContent = 'Le costó';
-      hard.addEventListener('click', () => { ok.disabled = true; hard.disabled = true; answerExercise(exercise.id, false); });
-      actions.append(ok, hard);
+      const select = document.createElement('select');
+      select.append(new Option('¿Cómo respondió?', ''), new Option('Respondió bien', 'correct'), new Option('Respondió mal', 'wrong'));
+      const save = document.createElement('button');
+      save.className = 'primary';
+      save.textContent = 'Guardar resultado';
+      save.onclick = async () => {
+        if (!select.value) return toast('Elige cómo respondió el paciente.', 'error');
+        save.disabled = true;
+        try {
+          await api(`/v1/cognitive-exercises/${exercise.id}/answer`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({correct: select.value === 'correct'})});
+          toast('Resultado guardado.', 'success');
+          await load();
+        } catch (error) { notify(error); } finally { save.disabled = false; }
+      };
+      actions.append(select, save);
       article.append(actions);
     }
     target.append(article);
   }
-  if (!target.children.length) target.append(empty('Todavía no hay ejercicios. Genera uno desde un recuerdo verificado.'));
+  if (!target.children.length) target.append(empty('Todavía no hay ejercicios. Programa uno con el formulario de arriba.'));
+}
+
+const exerciseForm = document.querySelector('#exercise-form');
+if (exerciseForm) {
+  exerciseForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const data = new FormData(event.target);
+    const when = data.get('scheduled_at');
+    if (!when) return notify(new Error('Indica la fecha y la hora.'));
+    try {
+      await api('/v1/cognitive-exercises/scheduled', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          question: data.get('question'), expected_answer: data.get('expected_answer'),
+          scheduled_at: new Date(when).toISOString(), category: data.get('category'),
+          notes: data.get('notes') || null,
+        }),
+      });
+      event.target.reset();
+      const status = document.querySelector('#exercise-program-status');
+      if (status) status.textContent = 'Ejercicio programado. Faro se lo preguntará a la hora indicada.';
+      toast('Ejercicio programado.', 'success');
+      await load();
+    } catch (error) { notify(error); }
+  });
+}
+for (const period of ['daily', 'weekly', 'monthly']) {
+  const button = document.querySelector(`#report-${period}`);
+  if (button) button.addEventListener('click', async () => {
+    try {
+      const report = await api(`/v1/cognitive-exercises/report?period=${period}`);
+      const line = document.querySelector('#exercise-report');
+      if (line) line.textContent = report.summary;
+    } catch (error) { notify(error); }
+  });
 }
 
 const agendaCategoryLabels = {medication: 'Medicación', routine: 'Rutina', appointment: 'Cita', other: 'Otra cosa'};

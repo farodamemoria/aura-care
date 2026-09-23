@@ -236,9 +236,17 @@ class CognitiveExerciseCreate(BaseModel):
     category: str = Field(default="recall", pattern="^(recall|orientation|naming)$")
 
 
+class ScheduledExerciseCreate(BaseModel):
+    question: str = Field(min_length=3, max_length=300)
+    expected_answer: str = Field(min_length=1, max_length=300)
+    scheduled_at: datetime
+    category: str = Field(default="recall", pattern="^(recall|orientation|naming)$")
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
 class CognitiveExercise(BaseModel):
     id: UUID
-    memory_id: UUID
+    memory_id: Optional[UUID] = None
     category: str
     question: str
     expected_answer: str
@@ -247,6 +255,8 @@ class CognitiveExercise(BaseModel):
     correct: Optional[bool] = None
     answered_at: Optional[datetime] = None
     notes: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    asked_at: Optional[datetime] = None
 
 
 class CognitiveExerciseAnswer(BaseModel):
@@ -260,6 +270,15 @@ class CognitiveExerciseSummary(BaseModel):
     completed: int
     correct: int
     accuracy: float
+
+
+class CognitiveExerciseReport(BaseModel):
+    period: str
+    since: datetime
+    completed: int
+    correct: int
+    accuracy: float
+    summary: str
 
 
 class CalendarEventCreate(BaseModel):
@@ -3866,6 +3885,68 @@ def answer_cognitive_exercise(
     return updated
 
 
+@app.post("/v1/cognitive-exercises/scheduled", response_model=CognitiveExercise, status_code=201)
+def schedule_cognitive_exercise(
+    request: ScheduledExerciseCreate, authorization: Optional[str] = Header(default=None),
+) -> CognitiveExercise:
+    require_auth(authorization)
+    exercise = CognitiveExercise(
+        id=uuid4(), memory_id=None, category=request.category,
+        question=request.question.strip(), expected_answer=request.expected_answer.strip(),
+        created_at=now(), status="pending", notes=request.notes, scheduled_at=request.scheduled_at,
+    )
+    repository.cognitive_exercises[exercise.id] = exercise
+    repository.save_cognitive_exercises()
+    return exercise
+
+
+def run_exercise_tick(reference: Optional[datetime] = None) -> int:
+    reference = reference or now()
+    asked = 0
+    for exercise in list(repository.cognitive_exercises.values()):
+        if exercise.status != "pending" or exercise.scheduled_at is None or exercise.asked_at is not None:
+            continue
+        if exercise.scheduled_at <= reference:
+            repository.enqueue_voice_reminder(exercise.id, exercise.question)
+            repository.cognitive_exercises[exercise.id] = exercise.model_copy(update={"asked_at": reference})
+            asked += 1
+    if asked:
+        repository.save_cognitive_exercises()
+    return asked
+
+
+@app.post("/v1/cognitive-exercises/tick")
+def cognitive_exercise_tick(at: Optional[datetime] = None, authorization: Optional[str] = Header(default=None)) -> dict:
+    require_auth(authorization)
+    return {"asked": run_exercise_tick(at)}
+
+
+@app.get("/v1/cognitive-exercises/report", response_model=CognitiveExerciseReport)
+def cognitive_exercise_report(period: str = "daily", authorization: Optional[str] = Header(default=None)) -> CognitiveExerciseReport:
+    require_auth(authorization)
+    zone = family_zone()
+    days = {"daily": 1, "weekly": 7, "monthly": 30}.get(period)
+    if days is None:
+        raise HTTPException(status_code=422, detail="period debe ser daily, weekly o monthly")
+    end = now().astimezone(zone)
+    since = end - timedelta(days=days)
+    items = [
+        exercise for exercise in repository.cognitive_exercises.values()
+        if exercise.answered_at is not None and exercise.answered_at.astimezone(zone) >= since
+    ]
+    completed = len(items)
+    correct = sum(1 for exercise in items if exercise.correct)
+    accuracy = round(correct / completed * 100, 1) if completed else 0.0
+    label = {"daily": "diario", "weekly": "semanal", "monthly": "mensual"}[period]
+    summary = (
+        f"Informe {label}: {completed} ejercicios realizados y {correct} correctos ({accuracy}% de aciertos)."
+        if completed else f"Informe {label}: sin ejercicios completados en este periodo."
+    )
+    return CognitiveExerciseReport(
+        period=period, since=since, completed=completed, correct=correct, accuracy=accuracy, summary=summary,
+    )
+
+
 def calendar_reminder_message(event: CalendarEvent) -> str:
     momento = event.start_at.astimezone(family_zone()).strftime("%H:%M")
     if event.category == "medication":
@@ -4075,6 +4156,7 @@ def start_tick_scheduler(interval_seconds: int = 60) -> None:
             try:
                 run_medication_tick()
                 run_calendar_tick()
+                run_exercise_tick()
             except Exception as error:  # noqa: BLE001 - el planificador no debe morir
                 logging.getLogger("aura.scheduler").warning("tick error: %s", error)
 
