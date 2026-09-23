@@ -414,6 +414,9 @@ dialog.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 
 .exercise-card small { color: var(--muted); }
 .exercise-card span { color: var(--family-700); font-weight: 600; }
 .exercise-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.exercise-card { min-width: 0; overflow-wrap: anywhere; }
+.exercise-card strong, .exercise-card small, .exercise-card span { overflow-wrap: anywhere; word-break: break-word; }
+.review-grid > * { min-width: 0; }
 
 /* Parallax muy ligero del hero */
 .hero .welcome { transform: translateY(calc(var(--scroll, 0px) * -0.06)); will-change: transform; }

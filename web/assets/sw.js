@@ -1,5 +1,5 @@
 const CACHE='faro-familia-v35';
-const ASSETS=['/','/assets/app.css?v=3','/assets/events.css?v=2','/assets/people.css?v=2','/assets/care.css?v=2','/assets/patient.css?v=2','/assets/family.css?v=4','/assets/agenda.css?v=2','/assets/tokens.css?v=1','/assets/logo-light.svg','/assets/logo-dark.svg','/assets/icon.svg','/assets/icon-180.png','/assets/icon-192.png','/assets/icon-512.png','/assets/app.js?v=27','/assets/manifest.webmanifest'];
+const ASSETS=['/','/assets/app.css?v=3','/assets/events.css?v=2','/assets/people.css?v=2','/assets/care.css?v=2','/assets/patient.css?v=2','/assets/family.css?v=4','/assets/agenda.css?v=2','/assets/tokens.css?v=2','/assets/logo-light.svg','/assets/logo-dark.svg','/assets/icon.svg','/assets/icon-180.png','/assets/icon-192.png','/assets/icon-512.png','/assets/app.js?v=27','/assets/manifest.webmanifest'];
 
 self.addEventListener('install',event=>{
   self.skipWaiting();
