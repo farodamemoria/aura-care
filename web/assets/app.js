@@ -719,6 +719,12 @@ document.querySelector('#care-contact-form').addEventListener('submit', async ev
 });
 
 document.querySelector('#refresh').onclick = load;
+const clearHistory = document.querySelector('#clear-history');
+if (clearHistory) clearHistory.addEventListener('click', async () => {
+  if (!(await confirmAction('¿Borrar todo el historial de la Memoria? Esta acción no se puede deshacer.', 'Limpiar historial'))) return;
+  try { await api('/v1/events', {method: 'DELETE'}); toast('Historial borrado.', 'success'); await load(); }
+  catch (error) { notify(error); }
+});
 for (const filter of ['#event-filter', '#severity-filter', '#delivery-filter', '#event-order']) document.querySelector(filter).onchange = () => renderMemory();
 let searchTimer = null;
 document.querySelector('#event-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { memoryPage = 1; renderMemory(); }, 220); });
