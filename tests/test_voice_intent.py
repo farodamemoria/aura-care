@@ -88,6 +88,16 @@ def test_impact_uses_clear_summary_not_transcript(client: TestClient, monkeypatc
     assert all("Amara" not in event["summary"] for event in events)
 
 
+def test_clear_events_empties_history(client: TestClient) -> None:
+    client.post("/v1/events", headers=HEADERS, json={"kind": "system", "summary": "Prueba", "source": "portal"})
+    assert client.get("/v1/events", headers=HEADERS).json()
+    response = client.delete("/v1/events", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["deleted"] >= 1
+    assert client.get("/v1/events", headers=HEADERS).json() == []
+    assert client.delete("/v1/events").status_code == 401
+
+
 def test_reset_cooldowns_clears_recognition_state(client: TestClient) -> None:
     main.repository.last_outcome["local-care-circle:person:x"] = main.now()
     response = client.post("/v1/admin/reset-cooldowns", headers=HEADERS)

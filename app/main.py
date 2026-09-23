@@ -1166,6 +1166,12 @@ class InMemoryRepository:
             latitude=row["latitude"], longitude=row["longitude"], metadata=json.loads(row["metadata_json"]),
         ) for row in self.event_db.execute(query, params).fetchall()]
 
+    def clear_events(self) -> int:
+        with self.lock:
+            cursor = self.event_db.execute("DELETE FROM events")
+            self.event_db.commit()
+            return cursor.rowcount
+
     def search_conversations(self, query: str, limit: int) -> list[ConversationMemoryMatch]:
         query_normalized = normalize_memory_text(query)
         query_terms = memory_terms(query_normalized)
@@ -2674,6 +2680,13 @@ def create_event(request: EventCreate, authorization: Optional[str] = Header(def
         repository.update_event_metadata(event.id, alert_metadata)
         event = event.model_copy(update={"metadata": {**event.metadata, **alert_metadata}})
     return event
+
+
+@app.delete("/v1/events")
+def clear_events(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Vacía el historial de la pestaña Memoria."""
+    require_auth(authorization)
+    return {"deleted": repository.clear_events()}
 
 
 @app.get("/v1/events", response_model=list[Event])
