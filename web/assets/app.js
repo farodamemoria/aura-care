@@ -311,6 +311,12 @@ function renderExercises(exercises, summary) {
       ? (exercise.correct ? 'Resultado: correcto' : 'Resultado: con dificultad')
       : `Pendiente${when}`;
     article.append(question, answer, state);
+    if (exercise.patient_answer) {
+      const said = document.createElement('small');
+      said.className = 'patient-answer';
+      said.textContent = `Respondió: «${exercise.patient_answer}»`;
+      article.append(said);
+    }
     if (exercise.status !== 'completed') {
       const actions = document.createElement('div');
       actions.className = 'exercise-actions';

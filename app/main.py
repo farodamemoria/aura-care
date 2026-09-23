@@ -257,6 +257,7 @@ class CognitiveExercise(BaseModel):
     notes: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     asked_at: Optional[datetime] = None
+    patient_answer: Optional[str] = None
 
 
 class CognitiveExerciseAnswer(BaseModel):
@@ -2119,6 +2120,19 @@ async def voice_intent(
         transcript = None
     if not transcript:
         return VoiceIntentResult(matched=False, transcript="")
+    awaiting = None
+    for exercise in repository.cognitive_exercises.values():
+        if (
+            exercise.status == "pending" and exercise.asked_at is not None
+            and exercise.patient_answer is None and exercise.asked_at > now() - timedelta(minutes=5)
+        ) and (awaiting is None or exercise.asked_at > awaiting.asked_at):
+            awaiting = exercise
+    if awaiting is not None:
+        repository.cognitive_exercises[awaiting.id] = awaiting.model_copy(
+            update={"patient_answer": transcript}
+        )
+        repository.save_cognitive_exercises()
+        return VoiceIntentResult(matched=False, transcript=transcript)
     matched = is_lost_request(transcript)
     normalized = normalize_text(transcript)
     is_cough = bool(re.search(r"\b(cof+|cough\w*|tos|tose|toseu|tosido|tosida)\b", normalized))
