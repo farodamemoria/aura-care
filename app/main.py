@@ -2167,12 +2167,15 @@ async def voice_intent(
     if matched:
         kind = "lost"
         message = "Faro: o paciente di estar perdido ou desorientado."
+        summary = f"Petición de ayuda por voz: {transcript}"
     elif is_cough:
         kind = "episode"
         message = "Faro: detectáronse episodios de tos."
+        summary = "Se detectaron episodios de tos"
     else:
         kind = "hazard"
         message = "Faro: posible caída ou golpe forte detectado."
+        summary = "Posible caída o golpe fuerte detectado"
     alert_status = None
     contacts = enabled_alert_contacts()
     if contacts:
@@ -2183,7 +2186,7 @@ async def voice_intent(
         alert_status = "no_contact"
     repository.add_event(EventCreate(
         kind="help_request" if matched else "hazard",
-        summary=f"Petición de ayuda por voz: {transcript}",
+        summary=summary,
         source="glasses", severity="urgent",
         metadata={"transcript": transcript, "delivery_status": alert_status},
     ))

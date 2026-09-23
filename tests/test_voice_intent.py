@@ -71,6 +71,23 @@ def test_voice_intent_requires_auth(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_impact_uses_clear_summary_not_transcript(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        main, "transcribe_audio",
+        lambda data, filename="command.wav": "Subtítulos realizados por la comunidad de Amara.org",
+    )
+    response = client.post(
+        "/v1/voice/intent", headers=HEADERS,
+        data={"peak": "9000", "loud_ms": "120"},
+        files={"audio": ("command.wav", WAV, "audio/wav")},
+    )
+    assert response.status_code == 200
+    assert response.json()["matched"] is True
+    events = client.get("/v1/events?limit=5", headers=HEADERS).json()
+    assert any(event["summary"] == "Posible caída o golpe fuerte detectado" for event in events)
+    assert all("Amara" not in event["summary"] for event in events)
+
+
 def test_reset_cooldowns_clears_recognition_state(client: TestClient) -> None:
     main.repository.last_outcome["local-care-circle:person:x"] = main.now()
     response = client.post("/v1/admin/reset-cooldowns", headers=HEADERS)
