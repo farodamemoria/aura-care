@@ -50,6 +50,13 @@ function confirmAction(message, title = '¿Seguro?') {
 }
 
 function empty(message) { const node = document.createElement('div'); node.className = 'empty'; node.textContent = message; return node; }
+function setBadge(selector, count) {
+  const badge = document.querySelector(selector);
+  if (!badge) return;
+  badge.hidden = !count;
+  badge.textContent = count;
+}
+const isSameDay = (a, b) => a.toDateString() === b.toDateString();
 
 const ICON = {
   conversation: '<path d="M4 5h16v10H9l-5 4z"/>',
@@ -99,8 +106,13 @@ async function load() {
   document.querySelector('#people-count').textContent = people.length;
   document.querySelector('#review-count').textContent = pending.length;
   document.querySelector('#contact-count').textContent = contacts.length;
-  const badge = document.querySelector('#review-badge');
-  badge.hidden = !pending.length; badge.textContent = pending.length;
+  setBadge('#review-badge', pending.length);
+  setBadge('#patient-badge', patient ? 0 : 1);
+  setBadge('#people-badge', people.filter(person => !person.enrollment_complete).length);
+  setBadge('#care-badge', contacts.filter(contact => !contact.alerts_enabled).length);
+  setBadge('#memory-badge', events.filter(event => event.severity === 'urgent' || event.severity === 'attention').length);
+  setBadge('#exercises-badge', exercises.filter(exercise => exercise.status !== 'completed').length);
+  setBadge('#agenda-badge', agenda.filter(event => isSameDay(new Date(event.start_at), new Date())).length);
   document.querySelector('#contact-status').textContent = contacts.length
     ? `Avisos preparados para ${contacts.map(contact => contact.display_name).join(' y ')}.`
     : 'Todavía no hay destinatarios configurados.';
