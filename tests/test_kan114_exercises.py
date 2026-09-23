@@ -77,3 +77,15 @@ def test_answer_and_report(client: TestClient) -> None:
 
 def test_report_rejects_unknown_period(client: TestClient) -> None:
     assert client.get("/v1/cognitive-exercises/report?period=yearly", headers=HEADERS).status_code == 422
+
+
+def test_patient_answer_is_captured(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _schedule(client)
+    client.post("/v1/cognitive-exercises/tick", headers=HEADERS)
+    monkeypatch.setattr(main, "transcribe_audio", lambda data, filename="command.wav": "Se llama Toby")
+    response = client.post(
+        "/v1/voice/intent", headers=HEADERS, files={"audio": ("command.wav", b"RIFF" + b"\x00" * 40, "audio/wav")}
+    )
+    assert response.status_code == 200
+    items = client.get("/v1/cognitive-exercises", headers=HEADERS).json()
+    assert items[0]["patient_answer"] == "Se llama Toby"
