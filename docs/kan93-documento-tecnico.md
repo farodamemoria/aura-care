@@ -133,6 +133,10 @@ esperada y su memoria de origen; `POST /v1/cognitive-exercises/{exercise_id}/ans
 resultado y `GET /v1/cognitive-exercises/summary` devuelve realizados, acertados y precisión. El
 portal incluye la pestaña **Ejercicios** para verlos y marcarlos.
 
+Además, se pueden **programar** ejercicios con texto libre y hora (`POST /v1/cognitive-exercises/scheduled`);
+`POST /v1/cognitive-exercises/tick` (y el planificador) los pregunta por voz al paciente a su hora, y
+`GET /v1/cognitive-exercises/report?period=daily|weekly|monthly` devuelve el informe del periodo.
+
 ### 2.8 Agenda y recordatorios
 
 Agenda del paciente y la familia (`calendar_events`: título, categoría `medication`/`routine`/

@@ -169,7 +169,25 @@
       <div id="events" class="timeline"></div>
     </section>
     <section id="exercises-view" class="view" role="tabpanel" aria-labelledby="tab-exercises" tabindex="-1">
-      <div class="section-heading"><div><span class="kicker">Entrenar la memoria</span><h2>Ejercicios cognitivos</h2><p>Ejercicios creados a partir de recuerdos verificados. Marca el resultado para ver la evolución.</p></div><button id="exercise-refresh" class="secondary">Actualizar</button></div>
+      <div class="section-heading"><div><span class="kicker">Entrenar la memoria</span><h2>Ejercicios cognitivos</h2><p>Programa preguntas para el paciente: a la hora indicada, Faro se la pregunta por voz. Después marca si respondió bien o mal para medir su evolución.</p></div><button id="exercise-refresh" class="secondary">Actualizar</button></div>
+      <article class="card">
+        <h3>Nuevo ejercicio programado</h3>
+        <form id="exercise-form" class="form-grid">
+          <label>Pregunta<input name="question" required maxlength="300" placeholder="¿Cómo se llaman tus padres?"></label>
+          <label>Respuesta esperada<input name="expected_answer" required maxlength="300" placeholder="Ejemplo orientativo"></label>
+          <label>Fecha y hora<input name="scheduled_at" type="datetime-local" required></label>
+          <label>Categoría<select name="category"><option value="recall">Recuerdo</option><option value="orientation">Orientación</option><option value="naming">Nombrar</option></select></label>
+          <label>Notas (opcional)<textarea name="notes" maxlength="500"></textarea></label>
+          <button class="primary">Programar ejercicio</button>
+        </form>
+        <p id="exercise-program-status" class="status-line" role="status"></p>
+      </article>
+      <div class="memory-toolbar">
+        <button id="report-daily" class="secondary">Informe diario</button>
+        <button id="report-weekly" class="secondary">Informe semanal</button>
+        <button id="report-monthly" class="secondary">Informe mensual</button>
+      </div>
+      <p id="exercise-report" class="status-line" role="status"></p>
       <p id="exercise-summary" class="status-line" role="status">Sin resultados todavía.</p>
       <div id="exercises" class="review-grid"></div>
     </section>
