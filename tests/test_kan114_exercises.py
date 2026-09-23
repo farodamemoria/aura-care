@@ -89,3 +89,23 @@ def test_patient_answer_is_captured(client: TestClient, monkeypatch: pytest.Monk
     assert response.status_code == 200
     items = client.get("/v1/cognitive-exercises", headers=HEADERS).json()
     assert items[0]["patient_answer"] == "Se llama Toby"
+
+
+def test_repository_loads_exercise_with_legacy_none_memory_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("AURA_EVENT_DB", str(tmp_path / "events.db"))
+    monkeypatch.setenv("AURA_DATA_FILE", str(tmp_path / "state.json"))
+    repo = main.InMemoryRepository()
+    repo.event_db.execute(
+        "INSERT INTO cognitive_exercises(id, memory_id, category, question, expected_answer, created_at, "
+        "status, correct, answered_at, notes, scheduled_at, asked_at, patient_answer) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(main.uuid4()), "None", "recall", "¿Cómo se llama tu perro?", "Toby",
+         main.now().isoformat(), "pending", None, None, None, None, None, None),
+    )
+    repo.event_db.commit()
+    reloaded = main.InMemoryRepository()
+    exercise = next(iter(reloaded.cognitive_exercises.values()))
+    assert exercise.memory_id is None
+    assert exercise.question == "¿Cómo se llama tu perro?"

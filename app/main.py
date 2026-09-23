@@ -925,9 +925,10 @@ class InMemoryRepository:
             radius_meters REAL NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
         )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS cognitive_exercises (
-            id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, category TEXT NOT NULL, question TEXT NOT NULL,
+            id TEXT PRIMARY KEY, memory_id TEXT, category TEXT NOT NULL, question TEXT NOT NULL,
             expected_answer TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL,
-            correct INTEGER, answered_at TEXT, notes TEXT
+            correct INTEGER, answered_at TEXT, notes TEXT,
+            scheduled_at TEXT, asked_at TEXT, patient_answer TEXT
         )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS calendar_events (
             id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, start_at TEXT NOT NULL,
@@ -967,6 +968,14 @@ class InMemoryRepository:
         ):
             if column not in calendar_columns:
                 self.event_db.execute(statement)
+        exercise_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(cognitive_exercises)").fetchall()}
+        for column, statement in (
+            ("scheduled_at", "ALTER TABLE cognitive_exercises ADD COLUMN scheduled_at TEXT"),
+            ("asked_at", "ALTER TABLE cognitive_exercises ADD COLUMN asked_at TEXT"),
+            ("patient_answer", "ALTER TABLE cognitive_exercises ADD COLUMN patient_answer TEXT"),
+        ):
+            if column not in exercise_columns:
+                self.event_db.execute(statement)
         self.event_db.commit()
         for row in self.event_db.execute("SELECT * FROM memories ORDER BY created_at ASC").fetchall():
             memory = Memory(
@@ -1002,12 +1011,19 @@ class InMemoryRepository:
             )
             self.safe_zones[zone.id] = zone
         for row in self.event_db.execute("SELECT * FROM cognitive_exercises ORDER BY created_at ASC").fetchall():
+            keys = row.keys()
+            raw_memory = row["memory_id"]
             exercise = CognitiveExercise(
-                id=row["id"], memory_id=row["memory_id"], category=row["category"],
+                id=row["id"],
+                memory_id=None if raw_memory in (None, "", "None") else UUID(raw_memory),
+                category=row["category"],
                 question=row["question"], expected_answer=row["expected_answer"],
                 created_at=row["created_at"], status=row["status"],
                 correct=(None if row["correct"] is None else bool(row["correct"])),
                 answered_at=row["answered_at"], notes=row["notes"],
+                scheduled_at=row["scheduled_at"] if "scheduled_at" in keys else None,
+                asked_at=row["asked_at"] if "asked_at" in keys else None,
+                patient_answer=row["patient_answer"] if "patient_answer" in keys else None,
             )
             self.cognitive_exercises[exercise.id] = exercise
         for row in self.event_db.execute("SELECT * FROM calendar_events ORDER BY start_at ASC").fetchall():
@@ -1383,13 +1399,18 @@ class InMemoryRepository:
             self.event_db.execute("DELETE FROM cognitive_exercises")
             self.event_db.executemany(
                 "INSERT INTO cognitive_exercises(id, memory_id, category, question, expected_answer, "
-                "created_at, status, correct, answered_at, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, status, correct, answered_at, notes, scheduled_at, asked_at, patient_answer) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (str(exercise.id), str(exercise.memory_id), exercise.category, exercise.question,
+                    (str(exercise.id), "" if exercise.memory_id is None else str(exercise.memory_id),
+                     exercise.category, exercise.question,
                      exercise.expected_answer, exercise.created_at.isoformat(), exercise.status,
                      None if exercise.correct is None else (1 if exercise.correct else 0),
                      exercise.answered_at.isoformat() if exercise.answered_at else None,
-                     exercise.notes)
+                     exercise.notes,
+                     exercise.scheduled_at.isoformat() if exercise.scheduled_at else None,
+                     exercise.asked_at.isoformat() if exercise.asked_at else None,
+                     exercise.patient_answer)
                     for exercise in self.cognitive_exercises.values()
                 ],
             )
