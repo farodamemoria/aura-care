@@ -4120,7 +4120,10 @@ def update_calendar_event(
     event = repository.calendar_events.get(event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Calendar event not found")
-    updated = event.model_copy(update=request.model_dump(exclude_unset=True))
+    changes = request.model_dump(exclude_unset=True)
+    if any(field in changes for field in ("start_at", "reminder_minutes_before", "enabled")):
+        changes["reminded_at"] = None
+    updated = event.model_copy(update=changes)
     repository.calendar_events[event_id] = updated
     repository.save_calendar_events()
     return updated
