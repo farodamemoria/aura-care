@@ -2967,10 +2967,15 @@ FAMILY_PERIOD_LABELS: dict[str, dict[int, str]] = {
     "gl": {7: "esta semana", 30: "este mes"},
     "en": {7: "this week", 30: "this month"},
 }
+FAMILY_PERIOD_PREVIOUS: dict[str, dict[int, str]] = {
+    "es": {7: "la semana pasada", 30: "el mes pasado"},
+    "gl": {7: "a semana pasada", 30: "o mes pasado"},
+    "en": {7: "last week", 30: "last month"},
+}
 
 
 def family_period(question: str, language: str, target: date) -> Optional[tuple[datetime, datetime, str]]:
-    """Ventana para preguntas tipo 'esta semana'/'este mes' (por defecto, un solo día)."""
+    """Ventana para 'esta semana' (lunes–domingo) o 'este mes' (por defecto, un solo día)."""
     normalized = normalize_memory_text(question)
     days = next(
         (value for word, value in FAMILY_PERIOD_WORDS.get(language, FAMILY_PERIOD_WORDS["es"]) if word in normalized),
@@ -2979,13 +2984,17 @@ def family_period(question: str, language: str, target: date) -> Optional[tuple[
     if days is None:
         return None
     previous = any(word in normalized for word in ("pasada", "pasado", "anterior", "last"))
+    labels = (FAMILY_PERIOD_PREVIOUS if previous else FAMILY_PERIOD_LABELS).get(language, FAMILY_PERIOD_LABELS["es"])
+    if days == 7:
+        anchor = target - timedelta(days=7) if previous else target
+        monday = anchor - timedelta(days=anchor.weekday())
+        start, _ = family_day_window(monday)
+        _, end = family_day_window(monday + timedelta(days=6)) if previous else family_day_window(anchor)
+        return start, end, labels[7]
     anchor = target - timedelta(days=days) if previous else target
     start, _ = family_day_window(anchor - timedelta(days=days - 1))
     _, end = family_day_window(anchor)
-    label = FAMILY_PERIOD_LABELS.get(language, FAMILY_PERIOD_LABELS["es"]).get(
-        days, "la semana" if days == 7 else "el mes"
-    )
-    return start, end, label
+    return start, end, labels[30]
 
 
 def family_time_label(moment: datetime) -> str:

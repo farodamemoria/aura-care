@@ -19,12 +19,18 @@ def _today():
     return main.now().astimezone(main.family_zone()).date()
 
 
-def test_week_question_returns_week_window() -> None:
+def test_week_question_returns_natural_week() -> None:
     period = main.family_period("¿Hay algún registro de esta semana?", "es", _today())
     assert period is not None
     start, end, label = period
     assert label == "esta semana"
-    assert timedelta(days=6) <= (end - start) <= timedelta(days=7, seconds=1)
+    assert start.astimezone(main.family_zone()).weekday() == 0  # empieza en lunes
+    assert end >= start
+
+
+def test_last_week_label() -> None:
+    period = main.family_period("dame la semana pasada", "es", _today())
+    assert period is not None and period[2] == "la semana pasada"
 
 
 def test_month_question_returns_month_window() -> None:
@@ -41,15 +47,16 @@ def test_plain_question_has_no_period() -> None:
     assert main.family_period("¿cómo ha ido hoy?", "es", _today()) is None
 
 
-def test_week_window_includes_past_days(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_week_window_includes_this_week_days(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AURA_EVENT_DB", str(tmp_path / "events.db"))
     monkeypatch.setenv("AURA_DATA_FILE", str(tmp_path / "state.json"))
     repository = main.InMemoryRepository()
     monkeypatch.setattr(main, "repository", repository)
+    monday_offset = _today().weekday()
     repository.add_event(main.EventCreate(
-        kind="hazard", summary="Aviso de hace 3 días", source="glasses",
-        occurred_at=main.now() - timedelta(days=3),
+        kind="hazard", summary="Aviso del lunes de esta semana", source="glasses",
+        occurred_at=main.now() - timedelta(days=monday_offset),
     ))
     start, end, _ = main.family_period("esta semana", "es", _today())
     events = main.family_day_events(start, end)
-    assert any(event.summary == "Aviso de hace 3 días" for event in events)
+    assert any(event.summary == "Aviso del lunes de esta semana" for event in events)
