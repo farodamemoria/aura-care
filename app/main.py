@@ -2957,6 +2957,37 @@ def family_day_window(target: date) -> tuple[datetime, datetime]:
     return start_local.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
+FAMILY_PERIOD_WORDS: dict[str, tuple[tuple[str, int], ...]] = {
+    "es": (("semana", 7), ("mes", 30), ("ultimos dias", 7), ("ultimamente", 7)),
+    "gl": (("semana", 7), ("mes", 30), ("ultimos dias", 7), ("ultimamente", 7)),
+    "en": (("week", 7), ("month", 30), ("last days", 7), ("lately", 7)),
+}
+FAMILY_PERIOD_LABELS: dict[str, dict[int, str]] = {
+    "es": {7: "esta semana", 30: "este mes"},
+    "gl": {7: "esta semana", 30: "este mes"},
+    "en": {7: "this week", 30: "this month"},
+}
+
+
+def family_period(question: str, language: str, target: date) -> Optional[tuple[datetime, datetime, str]]:
+    """Ventana para preguntas tipo 'esta semana'/'este mes' (por defecto, un solo día)."""
+    normalized = normalize_memory_text(question)
+    days = next(
+        (value for word, value in FAMILY_PERIOD_WORDS.get(language, FAMILY_PERIOD_WORDS["es"]) if word in normalized),
+        None,
+    )
+    if days is None:
+        return None
+    previous = any(word in normalized for word in ("pasada", "pasado", "anterior", "last"))
+    anchor = target - timedelta(days=days) if previous else target
+    start, _ = family_day_window(anchor - timedelta(days=days - 1))
+    _, end = family_day_window(anchor)
+    label = FAMILY_PERIOD_LABELS.get(language, FAMILY_PERIOD_LABELS["es"]).get(
+        days, "la semana" if days == 7 else "el mes"
+    )
+    return start, end, label
+
+
 def family_time_label(moment: datetime) -> str:
     return moment.astimezone(family_zone()).strftime("%H:%M")
 
@@ -3358,8 +3389,12 @@ def ask_family_question(
     repository.add_family_message(conversation_id, "user", question)
     language = family_language(request.language)
     target = family_target_date(question)
-    day_label = family_day_label(target, language)
-    start, end = family_day_window(target)
+    period = family_period(question, language, target)
+    if period is not None:
+        start, end, day_label = period
+    else:
+        day_label = family_day_label(target, language)
+        start, end = family_day_window(target)
     if family_is_closing(question):
         answer = FAMILY_CLOSERS_REPLY.get(language, FAMILY_CLOSERS_REPLY["es"])
         repository.add_family_message(conversation_id, "assistant", answer)
