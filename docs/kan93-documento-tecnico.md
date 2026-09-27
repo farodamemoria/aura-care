@@ -203,6 +203,8 @@ Avisos:
   `POST /v1/protective-observations`.
 - Demos: `POST /v1/admin/reset-cooldowns` limpia los anti-repetición en memoria (reconocimiento,
   revisiones y avisos) para poder repetir un anuncio sin esperar.
+- Demos: `POST /v1/admin/seed-demo-history` genera historial de demo (ejercicios y avisos) para
+  poblar la pestaña Estadísticas.
 
 Ubicación:
 
