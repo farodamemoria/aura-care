@@ -282,6 +282,28 @@ class CognitiveExerciseReport(BaseModel):
     summary: str
 
 
+class StatsDay(BaseModel):
+    date: str
+    exercises: int
+    exercises_correct: int
+    accuracy: float
+    alerts: int
+    urgent: int
+
+
+class StatsSummary(BaseModel):
+    exercises_completed: int
+    accuracy: float
+    alerts: int
+    trend: str
+
+
+class StatsEvolution(BaseModel):
+    generated_at: datetime
+    days: list[StatsDay]
+    summary: StatsSummary
+
+
 class CalendarEventCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     category: str = Field(default="other", pattern="^(medication|routine|appointment|other)$")
@@ -4125,6 +4147,71 @@ def cognitive_exercise_report(period: str = "daily", authorization: Optional[str
     )
     return CognitiveExerciseReport(
         period=period, since=since, completed=completed, correct=correct, accuracy=accuracy, summary=summary,
+    )
+
+
+@app.get("/v1/stats/evolution", response_model=StatsEvolution)
+def stats_evolution(days: int = 30, authorization: Optional[str] = Header(default=None)) -> StatsEvolution:
+    """Evolución diaria del paciente: ejercicios cognitivos + alertas, en modo gráfico/cronológico."""
+    require_auth(authorization)
+    if days < 7 or days > 180:
+        days = 30
+    zone = family_zone()
+    today = now().astimezone(zone).date()
+    buckets: dict[date, dict[str, int]] = {
+        today - timedelta(days=days - 1 - index): {"exercises": 0, "correct": 0, "alerts": 0, "urgent": 0}
+        for index in range(days)
+    }
+    for exercise in repository.cognitive_exercises.values():
+        if exercise.answered_at is None:
+            continue
+        day = exercise.answered_at.astimezone(zone).date()
+        if day in buckets:
+            buckets[day]["exercises"] += 1
+            if exercise.correct:
+                buckets[day]["correct"] += 1
+    for event in repository.list_events(1000, None):
+        day = event.occurred_at.astimezone(zone).date()
+        if day in buckets and event.severity in {"urgent", "attention"}:
+            buckets[day]["alerts"] += 1
+            if event.severity == "urgent":
+                buckets[day]["urgent"] += 1
+    series = [
+        StatsDay(
+            date=day.isoformat(),
+            exercises=bucket["exercises"],
+            exercises_correct=bucket["correct"],
+            accuracy=round(bucket["correct"] / bucket["exercises"] * 100, 1) if bucket["exercises"] else 0.0,
+            alerts=bucket["alerts"],
+            urgent=bucket["urgent"],
+        )
+        for day, bucket in sorted(buckets.items())
+    ]
+    total_exercises = sum(item.exercises for item in series)
+    total_correct = sum(item.exercises_correct for item in series)
+    overall_accuracy = round(total_correct / total_exercises * 100, 1) if total_exercises else 0.0
+
+    def accuracy_of(items: list[StatsDay]) -> Optional[float]:
+        total = sum(item.exercises for item in items)
+        correct = sum(item.exercises_correct for item in items)
+        return (correct / total * 100) if total else None
+
+    half = days // 2
+    first, second = accuracy_of(series[:half]), accuracy_of(series[half:])
+    if first is None or second is None:
+        trend = "sin-datos"
+    elif second - first >= 5:
+        trend = "mejora"
+    elif first - second >= 5:
+        trend = "deterioro"
+    else:
+        trend = "estable"
+    return StatsEvolution(
+        generated_at=now(), days=series,
+        summary=StatsSummary(
+            exercises_completed=total_exercises, accuracy=overall_accuracy,
+            alerts=sum(item.alerts for item in series), trend=trend,
+        ),
     )
 
 

@@ -420,3 +420,21 @@ dialog.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 
 
 /* Parallax muy ligero del hero */
 .hero .welcome { transform: translateY(calc(var(--scroll, 0px) * -0.06)); will-change: transform; }
+
+/* --------------------------- Estadísticas ------------------------------- */
+.stats-chart {
+  display: flex; align-items: flex-end; gap: 3px; height: 170px; padding: 14px; margin: 0 0 16px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--soft-shadow); overflow-x: auto;
+}
+.stat-col { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; flex: 0 0 14px; height: 100%; gap: 2px; }
+.stat-bar { width: 100%; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, var(--family), var(--brand)); transition: height 0.3s ease; }
+.stat-bar.has-alerts { background: linear-gradient(180deg, #e0a63a, #b07a1a); }
+.stat-bar.has-urgent { background: linear-gradient(180deg, var(--danger), #8a2e23); }
+.stat-alerts { font-size: 0.62rem; font-weight: 700; color: var(--danger); }
+.stats-list {
+  display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--soft-shadow); overflow: hidden;
+}
+.stat-row { padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 0.87rem; color: var(--ink); }
+.stat-row:last-child { border-bottom: 0; }

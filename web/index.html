@@ -56,6 +56,7 @@
       <button id="tab-memory" class="tab" role="tab" aria-selected="false" aria-controls="memory-view" data-view="memory-view">Memoria <span id="memory-badge" class="badge" hidden></span></button>
       <button id="tab-exercises" class="tab" role="tab" aria-selected="false" aria-controls="exercises-view" data-view="exercises-view">Ejercicios <span id="exercises-badge" class="badge" hidden></span></button>
       <button id="tab-agenda" class="tab" role="tab" aria-selected="false" aria-controls="agenda-view" data-view="agenda-view">Agenda <span id="agenda-badge" class="badge" hidden></span></button>
+      <button id="tab-stats" class="tab" role="tab" aria-selected="false" aria-controls="stats-view" data-view="stats-view">Estadísticas</button>
     </nav>
     <section id="patient-view" class="view active" role="tabpanel" aria-labelledby="tab-patient" tabindex="-1">
       <div class="section-heading"><div><span class="kicker">Quien usa las gafas</span><h2>Ficha del paciente</h2><p>Información propia de la persona a la que acompaña Faro. No se mezcla con familiares, cuidadores ni personas reconocidas.</p></div></div>
@@ -214,6 +215,12 @@
       </article>
       <div id="agenda-events" class="agenda-grid"></div>
     </section>
+    <section id="stats-view" class="view" role="tabpanel" aria-labelledby="tab-stats" tabindex="-1">
+      <div class="section-heading"><div><span class="kicker">Evolución</span><h2>Estadísticas</h2><p>Mejora o deterioro del paciente según los ejercicios cognitivos y las alertas de los últimos 30 días.</p></div><button id="stats-refresh" class="secondary">Actualizar</button></div>
+      <p id="stats-summary" class="status-line" role="status">Cargando…</p>
+      <div id="stats-chart" class="stats-chart" aria-hidden="true"></div>
+      <div id="stats-list" class="stats-list"></div>
+    </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" loading="lazy" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir fotos</span><input type="file" name="files" accept="image/jpeg,image/png,image/heic" multiple required></label><div class="file-hint">De 1 a 5 fotos. Frontal, con buena luz y sin otras personas (3–5 mejoran la precisión).</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
@@ -227,6 +234,6 @@
       </div>
     </div>
   </dialog>
-  <script src="/assets/app.js?v=32" defer></script>
+  <script src="/assets/app.js?v=33" defer></script>
 </body>
 </html>
