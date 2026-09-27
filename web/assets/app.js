@@ -365,25 +365,42 @@ function renderStats(stats) {
   const summary = document.querySelector('#stats-summary');
   const chart = document.querySelector('#stats-chart');
   const list = document.querySelector('#stats-list');
+  const donut = document.querySelector('#stats-donut');
   if (!stats) { if (summary) summary.textContent = 'Sin datos de estadísticas todavía.'; return; }
   const s = stats.summary;
   const trend = {mejora: 'mejorando', deterioro: 'en deterioro', estable: 'estable', 'sin-datos': 'sin datos suficientes'}[s.trend] || s.trend;
   if (summary) summary.textContent = `${s.exercises_completed} ejercicios completados · ${s.accuracy}% de aciertos · ${s.alerts} avisos en 30 días · Tendencia: ${trend}.`;
+  if (donut) {
+    const size = 150, stroke = 16, r = (size - stroke) / 2, circumference = 2 * Math.PI * r;
+    const filled = Math.max(0, Math.min(100, s.accuracy)) / 100 * circumference;
+    const color = s.accuracy >= 70 ? 'var(--family)' : s.accuracy >= 40 ? '#e0a63a' : 'var(--danger)';
+    donut.innerHTML =
+      `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="${Math.round(s.accuracy)}% de aciertos">` +
+      `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--line)" stroke-width="${stroke}"/>` +
+      `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round" ` +
+      `stroke-dasharray="${filled} ${circumference - filled}" transform="rotate(-90 ${size / 2} ${size / 2})"/>` +
+      `<text x="50%" y="47%" text-anchor="middle" font-size="30" font-weight="700" fill="var(--brand)">${Math.round(s.accuracy)}%</text>` +
+      `<text x="50%" y="63%" text-anchor="middle" font-size="12" fill="var(--muted)">aciertos</text></svg>`;
+  }
   if (chart) {
     chart.replaceChildren();
-    for (const day of stats.days) {
-      const col = document.createElement('div');
-      col.className = 'stat-col';
-      const bar = document.createElement('div');
-      bar.className = 'stat-bar' + (day.urgent ? ' has-urgent' : day.alerts ? ' has-alerts' : '');
-      const height = day.exercises ? Math.max(day.accuracy, 4) : 0;
-      bar.style.height = `${height}%`;
-      bar.title = `${day.date}: ${day.exercises} ejercicios, ${day.exercises_correct} correctos (${day.accuracy}%), ${day.alerts} avisos`;
-      const label = document.createElement('span');
-      label.className = 'stat-alerts';
-      label.textContent = day.alerts ? day.alerts : '';
-      col.append(bar, label);
-      chart.append(col);
+    const withExercises = stats.days.filter(day => day.exercises).length;
+    if (!withExercises) {
+      chart.append(empty('Todavía no hay ejercicios completados en los últimos 30 días.'));
+    } else {
+      for (const day of stats.days) {
+        const col = document.createElement('div');
+        col.className = 'stat-col';
+        const bar = document.createElement('div');
+        bar.className = 'stat-bar' + (day.urgent ? ' has-urgent' : day.alerts ? ' has-alerts' : '');
+        bar.style.height = day.exercises ? `${Math.max(day.accuracy, 6)}%` : '0';
+        bar.title = `${day.date}: ${day.exercises} ejercicios, ${day.exercises_correct} correctos (${day.accuracy}%), ${day.alerts} avisos`;
+        const label = document.createElement('span');
+        label.className = 'stat-alerts';
+        label.textContent = day.alerts ? day.alerts : '';
+        col.append(bar, label);
+        chart.append(col);
+      }
     }
   }
   if (list) {

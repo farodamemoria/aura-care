@@ -218,7 +218,10 @@
     <section id="stats-view" class="view" role="tabpanel" aria-labelledby="tab-stats" tabindex="-1">
       <div class="section-heading"><div><span class="kicker">Evolución</span><h2>Estadísticas</h2><p>Mejora o deterioro del paciente según los ejercicios cognitivos y las alertas de los últimos 30 días.</p></div><button id="stats-refresh" class="secondary">Actualizar</button></div>
       <p id="stats-summary" class="status-line" role="status">Cargando…</p>
-      <div id="stats-chart" class="stats-chart" aria-hidden="true"></div>
+      <div class="stats-visual">
+        <div id="stats-donut" class="stats-donut" role="img" aria-label="Porcentaje de aciertos"></div>
+        <div id="stats-chart" class="stats-chart" aria-label="Evolución diaria"></div>
+      </div>
       <div id="stats-list" class="stats-list"></div>
     </section>
   </main>
@@ -234,6 +237,6 @@
       </div>
     </div>
   </dialog>
-  <script src="/assets/app.js?v=33" defer></script>
+  <script src="/assets/app.js?v=34" defer></script>
 </body>
 </html>
