@@ -73,3 +73,17 @@ def test_seed_demo_history_populates_stats(client: TestClient) -> None:
     assert any(item["category"] == "movement" for item in body["categories"])
     assert all(0.0 <= item["accuracy"] <= 100.0 for item in body["categories"])
     assert client.post("/v1/admin/seed-demo-history").status_code == 401
+
+
+def test_stats_insights_fallback_and_cache(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AURA_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _completed_exercise(client, correct=True)
+    first = client.get("/v1/stats/insights?days=30", headers=HEADERS).json()
+    assert first["insight"]
+    assert first["generated_by"] == "summary"
+    assert first["cached"] is False
+    second = client.get("/v1/stats/insights?days=30", headers=HEADERS).json()
+    assert second["cached"] is True
+    assert second["insight"] == first["insight"]
+    assert client.get("/v1/stats/insights?days=30").status_code == 401

@@ -455,3 +455,16 @@ dialog.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 
 @media (max-width: 560px) {
   .stat-cat { grid-template-columns: 110px 1fr 70px; }
 }
+
+.stats-insight {
+  margin-bottom: 16px; padding: 16px 18px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: linear-gradient(135deg, rgba(167, 216, 240, 0.18), rgba(246, 234, 217, 0.35));
+  box-shadow: var(--soft-shadow);
+}
+.stats-insight-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.stats-insight-head strong { color: var(--brand); }
+.stats-insight-text { margin: 0; color: var(--ink); line-height: 1.5; white-space: pre-line; }
+@media (max-width: 560px) {
+  .stats-insight-head { flex-direction: column; align-items: flex-start; }
+  .stats-insight-head button { width: 100%; }
+}
