@@ -445,3 +445,13 @@ dialog.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 
 }
 .stat-row { padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 0.87rem; color: var(--ink); }
 .stat-row:last-child { border-bottom: 0; }
+.stats-subtitle { color: var(--brand); font-size: 0.95rem; margin: 6px 0 8px; }
+.stats-categories { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.stat-cat { display: grid; grid-template-columns: 150px 1fr 96px; align-items: center; gap: 10px; font-size: 0.85rem; color: var(--ink); }
+.stat-cat-name { font-weight: 600; }
+.stat-cat-bar { height: 12px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.stat-cat-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--family), var(--brand)); transition: width 0.3s ease; }
+.stat-cat-value { text-align: right; color: var(--muted); }
+@media (max-width: 560px) {
+  .stat-cat { grid-template-columns: 110px 1fr 70px; }
+}
