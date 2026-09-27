@@ -3283,6 +3283,18 @@ def openai_family_answer(
         agenda_items.append(f"- {momento} · {calendar_event.title} ({calendar_event.category}, {destino})")
     if agenda_items:
         context += "\n\nAgenda próxima:\n" + "\n".join(agenda_items[:15])
+    people_lines = [
+        f"- {person.display_name} ({person.relationship})"
+        for person in sorted(repository.people.values(), key=lambda item: item.display_name.lower())
+    ]
+    if people_lines:
+        context += "\n\nPersonas conocidas (que Faro reconoce):\n" + "\n".join(people_lines)
+    care_lines = [
+        f"- {contact.display_name} ({'familiar' if contact.role == 'family' else 'cuidador'})"
+        for contact in sorted(repository.care_contacts.values(), key=lambda item: item.priority)
+    ]
+    if care_lines:
+        context += "\n\nRed de cuidados (familiares y cuidadores):\n" + "\n".join(care_lines)
     transcript = "\n".join(
         f"{'Familiar' if turn.get('role') == 'user' else 'Faro'}: {turn.get('content', '')}"
         for turn in (history or [])
@@ -3306,7 +3318,9 @@ def openai_family_answer(
         f"2) Registrar avisos automáticos por WhatsApp a la red de cuidados ({contacts_label}) "
         "ante palabras clave concretas, usando la herramienta registrar_aviso.\n"
         "3) Programar recordatorios en la agenda de Faro (del paciente o de la familia) con la "
-        "herramienta crear_recordatorio, usando la fecha y hora que indique el familiar.\n\n"
+        "herramienta crear_recordatorio, usando la fecha y hora que indique el familiar.\n"
+        "4) Informar de las personas conocidas del paciente y de la red de cuidados (familiares y "
+        "cuidadores) con sus nombres, usando «Personas conocidas» y «Red de cuidados».\n\n"
         "Reglas que debes cumplir siempre:\n"
         "- No repitas el resumen del día salvo que te pregunten por el día o por los eventos. Si "
         "el mensaje es un saludo, una despedida, un agradecimiento o charla, responde con "
@@ -3329,6 +3343,9 @@ def openai_family_answer(
         "- Si preguntan por un objeto (llaves, mando, gafas...), usa «Objetos recordados "
         "recientemente» y responde con el lugar y el momento en que se vio por última vez; si no "
         "aparece, dilo con claridad.\n"
+        "- Si preguntan por los nombres de las personas conocidas, familiares o cuidadores, "
+        "respóndelos usando «Personas conocidas» y «Red de cuidados»; no digas que no lo sabes si "
+        "aparecen ahí.\n"
         "- No des consejos médicos ni alarmes sin motivo.\n"
         "- Sé coherente con los mensajes anteriores de esta conversación y no te repitas.\n"
         "- Si el familiar pide que se le avise ante algo concreto (o confirma con un 'sí' una "
