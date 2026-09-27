@@ -982,6 +982,17 @@ const exerciseRefresh = document.querySelector('#exercise-refresh');
 if (exerciseRefresh) exerciseRefresh.addEventListener('click', () => load());
 const statsRefresh = document.querySelector('#stats-refresh');
 if (statsRefresh) statsRefresh.addEventListener('click', () => load());
+const statsInsightBtn = document.querySelector('#stats-insight-btn');
+if (statsInsightBtn) statsInsightBtn.addEventListener('click', async () => {
+  const text = document.querySelector('#stats-insight-text');
+  statsInsightBtn.disabled = true;
+  if (text) text.textContent = 'Analizando la evolución…';
+  try {
+    const result = await api('/v1/stats/insights?days=30');
+    if (text) text.textContent = result.insight;
+  } catch (error) { if (text) text.textContent = 'No se pudo generar la valoración.'; notify(error); }
+  finally { statsInsightBtn.disabled = false; }
+});
 
 const agendaForm = document.querySelector('#agenda-form');
 if (agendaForm) {

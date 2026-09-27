@@ -44,6 +44,7 @@ CONSENSUS_MINIMUM = 2
 SAME_PERSON_COOLDOWN = timedelta(seconds=int(os.getenv("AURA_SAME_PERSON_COOLDOWN_SECONDS", "900")))
 REVIEW_COOLDOWN = timedelta(minutes=2)
 EXERCISE_ABANDON_WINDOW = timedelta(minutes=10)
+STATS_INSIGHT_TTL = timedelta(minutes=10)
 EMERGENCY_ALERT_COOLDOWN = timedelta(seconds=int(os.getenv("AURA_EMERGENCY_ALERT_COOLDOWN_SECONDS", "120")))
 REVIEW_IMAGE_TTL = timedelta(hours=24)
 REVIEW_IMAGE_SUFFIX = ".bin"
@@ -319,6 +320,13 @@ class StatsEvolution(BaseModel):
     days: list[StatsDay]
     summary: StatsSummary
     categories: list[StatsCategory] = Field(default_factory=list)
+
+
+class StatsInsight(BaseModel):
+    insight: str
+    generated_at: datetime
+    generated_by: str
+    cached: bool = False
 
 
 class CalendarEventCreate(BaseModel):
@@ -915,6 +923,7 @@ class InMemoryRepository:
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
         self.last_outcome: dict[str, datetime] = {}
         self.last_review_created: dict[str, datetime] = {}
+        self.stats_insights: dict[str, tuple[datetime, str]] = {}
         self.last_glasses_not_worn: dict[str, datetime] = {}
         self.care_contacts: dict[UUID, CareContact] = {}
         self.emergency_alerts: dict[UUID, EmergencyAlert] = {}
@@ -4261,6 +4270,10 @@ def cognitive_exercise_report(period: str = "daily", authorization: Optional[str
 def stats_evolution(days: int = 30, authorization: Optional[str] = Header(default=None)) -> StatsEvolution:
     """Evolución diaria del paciente: ejercicios cognitivos + alertas, en modo gráfico/cronológico."""
     require_auth(authorization)
+    return compute_stats(days)
+
+
+def compute_stats(days: int = 30) -> StatsEvolution:
     if days < 7 or days > 180:
         days = 30
     refresh_abandoned()
@@ -4354,6 +4367,89 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
             avg_response_seconds=round(sum(all_responses) / len(all_responses)) if all_responses else None,
         ),
     )
+
+
+def _openai_response_text(data: dict) -> Optional[str]:
+    for item in data.get("output", []) or []:
+        for content in item.get("content", []) or []:
+            if content.get("text"):
+                return str(content["text"]).strip()
+    if isinstance(data.get("output_text"), str):
+        return data["output_text"].strip()
+    return None
+
+
+def build_stats_insight(evolution: StatsEvolution, days: int) -> tuple[str, str]:
+    """Valoración del estado del paciente a partir de las estadísticas (IA o resumen determinista)."""
+    summary = evolution.summary
+    profile = repository.get_patient_profile()
+    patient_name = profile.preferred_name if profile and profile.preferred_name else "el paciente"
+    category_text = "; ".join(
+        f"{item.category}: {item.exercises} ejercicios, {item.accuracy}% de aciertos"
+        for item in evolution.categories
+    ) or "sin datos por categoría"
+    api_key = os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if api_key:
+        try:
+            payload = json.dumps({
+                "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
+                "instructions": (
+                    "Eres Faro, asistente de acompañamiento de personas con problemas de memoria. A partir "
+                    "de las estadísticas de ejercicios cognitivos y alertas del paciente, redacta una "
+                    "valoración breve (máximo 6 frases, en español, tono cercano y claro) de lo que crees que "
+                    "está pasando con el paciente y una recomendación concreta para la familia. No hagas "
+                    "diagnósticos médicos ni alarmes sin motivo."
+                ),
+                "input": (
+                    f"Paciente: {patient_name}. Periodo: últimos {days} días.\n"
+                    f"Ejercicios completados: {summary.exercises_completed}. Aciertos: {summary.accuracy}%.\n"
+                    f"Tiempo medio de respuesta: {summary.avg_response_seconds} s. "
+                    f"Sin respuesta (posible frustración): {summary.abandoned}. "
+                    f"Ejercicios de movimiento/deporte: {summary.movement}.\n"
+                    f"Alertas: {summary.alerts}. Tendencia general: {summary.trend}.\n"
+                    f"Por categoría: {category_text}.\n"
+                    "Redacta la valoración y la recomendación."
+                ),
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                "https://api.openai.com/v1/responses", data=payload, method="POST",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            text = _openai_response_text(data)
+            if text:
+                return text, "openai"
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
+            pass
+    trend_text = {
+        "mejora": "una evolución positiva", "deterioro": "un cierto deterioro", "estable": "una evolución estable",
+    }.get(summary.trend, "datos todavía insuficientes")
+    return (
+        f"Valoración automática: en los últimos {days} días {patient_name} completó "
+        f"{summary.exercises_completed} ejercicios con un {summary.accuracy}% de aciertos, lo que sugiere "
+        f"{trend_text}. Se registraron {summary.alerts} avisos y {summary.abandoned} ejercicios sin respuesta. "
+        "Recomendación: mantener una rutina diaria de ejercicios variados (memoria, orientación y movimiento), "
+        "acompañar sin presionar y revisar los avisos con la red de cuidados.",
+        "summary",
+    )
+
+
+@app.get("/v1/stats/insights", response_model=StatsInsight)
+def stats_insights(
+    days: int = 30, refresh: bool = False, authorization: Optional[str] = Header(default=None),
+) -> StatsInsight:
+    """Valoración de la IA sobre la evolución del paciente (con caché de 10 min)."""
+    require_auth(authorization)
+    cache_key = str(days)
+    cached = repository.stats_insights.get(cache_key)
+    if cached is not None and not refresh and cached[0] > now() - STATS_INSIGHT_TTL:
+        return StatsInsight(insight=cached[1], generated_at=cached[0], generated_by="cache", cached=True)
+    evolution = compute_stats(days)
+    insight, generated_by = build_stats_insight(evolution, days)
+    generated_at = now()
+    repository.stats_insights[cache_key] = (generated_at, insight)
+    return StatsInsight(insight=insight, generated_at=generated_at, generated_by=generated_by, cached=False)
 
 
 def calendar_reminder_message(event: CalendarEvent) -> str:

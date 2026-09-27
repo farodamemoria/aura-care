@@ -139,7 +139,8 @@ Además, se pueden **programar** ejercicios con texto libre y hora (`POST /v1/co
 
 La pestaña **Estadísticas** usa `GET /v1/stats/evolution?days=30`: evolución diaria (ejercicios
 completados, % de aciertos, alertas y urgentes) en modo gráfico y cronológico, con una tendencia
-general (mejora / estable / deterioro).
+general (mejora / estable / deterioro). `GET /v1/stats/insights?days=30` genera (con IA, o resumen
+automático) una valoración del estado del paciente y una recomendación para la familia.
 
 ### 2.8 Agenda y recordatorios
 
@@ -260,7 +261,7 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v46`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v47`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.
