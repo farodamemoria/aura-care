@@ -84,11 +84,12 @@ function icon(name, size = 16) {
 }
 
 async function load() {
-  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda'];
+  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas'];
   const requests = [
     api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
     api('/v1/events?limit=500'), api('/v1/location-sessions/active'),
     api('/v1/cognitive-exercises'), api('/v1/cognitive-exercises/summary'), api('/v1/calendar-events'),
+    api('/v1/stats/evolution?days=30'),
   ];
   const settled = await Promise.allSettled(requests);
   const failed = [];
@@ -107,6 +108,7 @@ async function load() {
   const exercises = pick(6) || [];
   const exerciseSummary = pick(7);
   const agenda = pick(8) || [];
+  const stats = pick(9);
 
   const pending = reviews.filter(review => review.status === 'pending');
   document.querySelector('#people-count').textContent = people.length;
@@ -133,6 +135,7 @@ async function load() {
   renderTracking(tracking);
   if (exerciseSummary) renderExercises(exercises, exerciseSummary);
   renderAgenda(agenda);
+  renderStats(stats);
 
   if (failed.length) toast(`No se pudo cargar: ${failed.join(', ')}.`, 'error');
 }
@@ -356,6 +359,45 @@ function renderExercises(exercises, summary) {
     target.append(article);
   }
   if (!target.children.length) target.append(empty('Todavía no hay ejercicios. Programa uno con el formulario de arriba.'));
+}
+
+function renderStats(stats) {
+  const summary = document.querySelector('#stats-summary');
+  const chart = document.querySelector('#stats-chart');
+  const list = document.querySelector('#stats-list');
+  if (!stats) { if (summary) summary.textContent = 'Sin datos de estadísticas todavía.'; return; }
+  const s = stats.summary;
+  const trend = {mejora: 'mejorando', deterioro: 'en deterioro', estable: 'estable', 'sin-datos': 'sin datos suficientes'}[s.trend] || s.trend;
+  if (summary) summary.textContent = `${s.exercises_completed} ejercicios completados · ${s.accuracy}% de aciertos · ${s.alerts} avisos en 30 días · Tendencia: ${trend}.`;
+  if (chart) {
+    chart.replaceChildren();
+    for (const day of stats.days) {
+      const col = document.createElement('div');
+      col.className = 'stat-col';
+      const bar = document.createElement('div');
+      bar.className = 'stat-bar' + (day.urgent ? ' has-urgent' : day.alerts ? ' has-alerts' : '');
+      const height = day.exercises ? Math.max(day.accuracy, 4) : 0;
+      bar.style.height = `${height}%`;
+      bar.title = `${day.date}: ${day.exercises} ejercicios, ${day.exercises_correct} correctos (${day.accuracy}%), ${day.alerts} avisos`;
+      const label = document.createElement('span');
+      label.className = 'stat-alerts';
+      label.textContent = day.alerts ? day.alerts : '';
+      col.append(bar, label);
+      chart.append(col);
+    }
+  }
+  if (list) {
+    list.replaceChildren();
+    const rows = stats.days.filter(day => day.exercises || day.alerts).reverse();
+    for (const day of rows) {
+      const row = document.createElement('div');
+      row.className = 'stat-row';
+      const when = new Date(`${day.date}T12:00:00`).toLocaleDateString('es-ES', {weekday: 'short', day: 'numeric', month: 'short'});
+      row.textContent = `${when} · ${day.exercises} ejercicios, ${day.exercises_correct} correctos (${day.accuracy}%) · ${day.alerts} avisos`;
+      list.append(row);
+    }
+    if (!rows.length) list.append(empty('Todavía no hay actividad registrada en los últimos 30 días.'));
+  }
 }
 
 const exerciseForm = document.querySelector('#exercise-form');
@@ -858,6 +900,8 @@ if (talkReset) {
 
 const exerciseRefresh = document.querySelector('#exercise-refresh');
 if (exerciseRefresh) exerciseRefresh.addEventListener('click', () => load());
+const statsRefresh = document.querySelector('#stats-refresh');
+if (statsRefresh) statsRefresh.addEventListener('click', () => load());
 
 const agendaForm = document.querySelector('#agenda-form');
 if (agendaForm) {
