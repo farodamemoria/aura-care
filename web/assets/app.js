@@ -451,6 +451,33 @@ function renderStats(stats) {
     }
     if (!rows.length) list.append(empty('Todavía no hay actividad registrada en los últimos 30 días.'));
   }
+  const cats = document.querySelector('#stats-categories');
+  if (cats) {
+    cats.replaceChildren();
+    const labels = {recall: 'Recuerdo', orientation: 'Orientación', naming: 'Nombrar', movement: 'Movimiento/deporte'};
+    if (!stats.categories || !stats.categories.length) {
+      cats.append(empty('Sin datos por categoría todavía.'));
+    } else {
+      for (const item of stats.categories) {
+        const row = document.createElement('div');
+        row.className = 'stat-cat';
+        const name = document.createElement('span');
+        name.className = 'stat-cat-name';
+        name.textContent = labels[item.category] || item.category;
+        const bar = document.createElement('span');
+        bar.className = 'stat-cat-bar';
+        const fill = document.createElement('span');
+        fill.className = 'stat-cat-fill';
+        fill.style.width = `${Math.max(0, Math.min(100, item.accuracy))}%`;
+        bar.append(fill);
+        const value = document.createElement('span');
+        value.className = 'stat-cat-value';
+        value.textContent = `${item.exercises} · ${item.accuracy}%`;
+        row.append(name, bar, value);
+        cats.append(row);
+      }
+    }
+  }
 }
 
 const exerciseForm = document.querySelector('#exercise-form');

@@ -307,10 +307,18 @@ class StatsSummary(BaseModel):
     avg_response_seconds: Optional[float] = None
 
 
+class StatsCategory(BaseModel):
+    category: str
+    exercises: int
+    correct: int
+    accuracy: float
+
+
 class StatsEvolution(BaseModel):
     generated_at: datetime
     days: list[StatsDay]
     summary: StatsSummary
+    categories: list[StatsCategory] = Field(default_factory=list)
 
 
 class CalendarEventCreate(BaseModel):
@@ -4262,6 +4270,7 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
         today - timedelta(days=days - 1 - index): {"exercises": 0, "correct": 0, "alerts": 0, "urgent": 0, "abandoned": 0, "movement": 0, "responses": []}
         for index in range(days)
     }
+    category_totals: dict[str, dict[str, int]] = {}
     for exercise in repository.cognitive_exercises.values():
         if exercise.answered_at is not None:
             day = exercise.answered_at.astimezone(zone).date()
@@ -4273,6 +4282,10 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
                     buckets[day]["movement"] = int(buckets[day]["movement"]) + 1
                 if exercise.response_seconds is not None:
                     buckets[day]["responses"].append(exercise.response_seconds)  # type: ignore[union-attr]
+                entry = category_totals.setdefault(exercise.category, {"exercises": 0, "correct": 0})
+                entry["exercises"] += 1
+                if exercise.correct:
+                    entry["correct"] += 1
         elif exercise.abandoned and exercise.asked_at is not None:
             day = exercise.asked_at.astimezone(zone).date()
             if day in buckets:
@@ -4322,8 +4335,17 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
         trend = "deterioro"
     else:
         trend = "estable"
+    categories = [
+        StatsCategory(
+            category=name,
+            exercises=totals["exercises"],
+            correct=totals["correct"],
+            accuracy=round(totals["correct"] / totals["exercises"] * 100, 1) if totals["exercises"] else 0.0,
+        )
+        for name, totals in sorted(category_totals.items(), key=lambda item: item[1]["exercises"], reverse=True)
+    ]
     return StatsEvolution(
-        generated_at=now(), days=series,
+        generated_at=now(), days=series, categories=categories,
         summary=StatsSummary(
             exercises_completed=total_exercises, accuracy=overall_accuracy,
             alerts=sum(item.alerts for item in series), trend=trend,

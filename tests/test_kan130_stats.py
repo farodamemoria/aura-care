@@ -70,4 +70,6 @@ def test_seed_demo_history_populates_stats(client: TestClient) -> None:
     assert body["summary"]["exercises_completed"] > 10
     assert body["summary"]["avg_response_seconds"] is not None
     assert body["summary"]["abandoned"] >= 1
+    assert any(item["category"] == "movement" for item in body["categories"])
+    assert all(0.0 <= item["accuracy"] <= 100.0 for item in body["categories"])
     assert client.post("/v1/admin/seed-demo-history").status_code == 401
