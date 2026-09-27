@@ -330,6 +330,14 @@ function renderExercises(exercises, summary) {
       ? (exercise.correct ? 'Resultado: correcto' : 'Resultado: con dificultad')
       : `Pendiente${when}`;
     article.append(question, answer, state);
+    const details = [];
+    details.push(`Categoría: ${({recall: 'recuerdo', orientation: 'orientación', naming: 'nombrar', movement: 'movimiento/deporte'}[exercise.category] || exercise.category)}`);
+    if (exercise.response_seconds != null) details.push(`respondió en ${exercise.response_seconds} s`);
+    if (exercise.abandoned) details.push('sin respuesta (posible frustración)');
+    const meta = document.createElement('small');
+    meta.className = 'exercise-meta';
+    meta.textContent = details.join(' · ');
+    article.append(meta);
     if (exercise.patient_answer) {
       const said = document.createElement('small');
       said.className = 'patient-answer';
@@ -375,7 +383,11 @@ function renderStats(stats) {
     'sin-datos': {label: 'sin datos suficientes', arrow: '·', color: 'var(--muted)'},
   }[s.trend] || {label: s.trend, arrow: '', color: 'var(--muted)'};
   if (summary) {
-    summary.textContent = `${s.exercises_completed} ejercicios completados · ${s.accuracy}% de aciertos · ${s.alerts} avisos en 30 días · Tendencia: ${trend.arrow} ${trend.label}.`;
+    const extra = [
+      s.avg_response_seconds != null ? `tiempo medio de respuesta ${s.avg_response_seconds} s` : null,
+      s.abandoned ? `${s.abandoned} sin respuesta` : null,
+    ].filter(Boolean).join(' · ');
+    summary.textContent = `${s.exercises_completed} ejercicios completados · ${s.accuracy}% de aciertos · ${s.alerts} avisos en 30 días · Tendencia: ${trend.arrow} ${trend.label}` + (extra ? ` · ${extra}` : '') + '.';
   }
   if (donut) {
     const size = 150, stroke = 16, r = (size - stroke) / 2, circumference = 2 * Math.PI * r;

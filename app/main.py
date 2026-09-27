@@ -43,6 +43,7 @@ FACE_DETECTION_MINIMUM = 90.0
 CONSENSUS_MINIMUM = 2
 SAME_PERSON_COOLDOWN = timedelta(seconds=int(os.getenv("AURA_SAME_PERSON_COOLDOWN_SECONDS", "900")))
 REVIEW_COOLDOWN = timedelta(minutes=2)
+EXERCISE_ABANDON_WINDOW = timedelta(minutes=10)
 EMERGENCY_ALERT_COOLDOWN = timedelta(seconds=int(os.getenv("AURA_EMERGENCY_ALERT_COOLDOWN_SECONDS", "120")))
 REVIEW_IMAGE_TTL = timedelta(hours=24)
 REVIEW_IMAGE_SUFFIX = ".bin"
@@ -233,14 +234,14 @@ class SafeZoneStatus(BaseModel):
 
 class CognitiveExerciseCreate(BaseModel):
     memory_id: UUID
-    category: str = Field(default="recall", pattern="^(recall|orientation|naming)$")
+    category: str = Field(default="recall", pattern="^(recall|orientation|naming|movement)$")
 
 
 class ScheduledExerciseCreate(BaseModel):
     question: str = Field(min_length=3, max_length=300)
     expected_answer: str = Field(min_length=1, max_length=300)
     scheduled_at: datetime
-    category: str = Field(default="recall", pattern="^(recall|orientation|naming)$")
+    category: str = Field(default="recall", pattern="^(recall|orientation|naming|movement)$")
     notes: Optional[str] = Field(default=None, max_length=500)
 
 
@@ -258,6 +259,8 @@ class CognitiveExercise(BaseModel):
     scheduled_at: Optional[datetime] = None
     asked_at: Optional[datetime] = None
     patient_answer: Optional[str] = None
+    response_seconds: Optional[int] = None
+    abandoned: bool = False
 
 
 class CognitiveExerciseAnswer(BaseModel):
@@ -289,6 +292,8 @@ class StatsDay(BaseModel):
     accuracy: float
     alerts: int
     urgent: int
+    abandoned: int = 0
+    avg_response_seconds: Optional[float] = None
 
 
 class StatsSummary(BaseModel):
@@ -296,6 +301,8 @@ class StatsSummary(BaseModel):
     accuracy: float
     alerts: int
     trend: str
+    abandoned: int = 0
+    avg_response_seconds: Optional[float] = None
 
 
 class StatsEvolution(BaseModel):
@@ -953,7 +960,8 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, memory_id TEXT, category TEXT NOT NULL, question TEXT NOT NULL,
             expected_answer TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL,
             correct INTEGER, answered_at TEXT, notes TEXT,
-            scheduled_at TEXT, asked_at TEXT, patient_answer TEXT
+            scheduled_at TEXT, asked_at TEXT, patient_answer TEXT,
+            response_seconds INTEGER, abandoned INTEGER NOT NULL DEFAULT 0
         )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS calendar_events (
             id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, start_at TEXT NOT NULL,
@@ -998,6 +1006,8 @@ class InMemoryRepository:
             ("scheduled_at", "ALTER TABLE cognitive_exercises ADD COLUMN scheduled_at TEXT"),
             ("asked_at", "ALTER TABLE cognitive_exercises ADD COLUMN asked_at TEXT"),
             ("patient_answer", "ALTER TABLE cognitive_exercises ADD COLUMN patient_answer TEXT"),
+            ("response_seconds", "ALTER TABLE cognitive_exercises ADD COLUMN response_seconds INTEGER"),
+            ("abandoned", "ALTER TABLE cognitive_exercises ADD COLUMN abandoned INTEGER NOT NULL DEFAULT 0"),
         ):
             if column not in exercise_columns:
                 self.event_db.execute(statement)
@@ -1049,6 +1059,8 @@ class InMemoryRepository:
                 scheduled_at=row["scheduled_at"] if "scheduled_at" in keys else None,
                 asked_at=row["asked_at"] if "asked_at" in keys else None,
                 patient_answer=row["patient_answer"] if "patient_answer" in keys else None,
+                response_seconds=row["response_seconds"] if "response_seconds" in keys else None,
+                abandoned=bool(row["abandoned"]) if "abandoned" in keys else False,
             )
             self.cognitive_exercises[exercise.id] = exercise
         for row in self.event_db.execute("SELECT * FROM calendar_events ORDER BY start_at ASC").fetchall():
@@ -1430,8 +1442,9 @@ class InMemoryRepository:
             self.event_db.execute("DELETE FROM cognitive_exercises")
             self.event_db.executemany(
                 "INSERT INTO cognitive_exercises(id, memory_id, category, question, expected_answer, "
-                "created_at, status, correct, answered_at, notes, scheduled_at, asked_at, patient_answer) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, status, correct, answered_at, notes, scheduled_at, asked_at, patient_answer, "
+                "response_seconds, abandoned) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (str(exercise.id), "" if exercise.memory_id is None else str(exercise.memory_id),
                      exercise.category, exercise.question,
@@ -1441,7 +1454,9 @@ class InMemoryRepository:
                      exercise.notes,
                      exercise.scheduled_at.isoformat() if exercise.scheduled_at else None,
                      exercise.asked_at.isoformat() if exercise.asked_at else None,
-                     exercise.patient_answer)
+                     exercise.patient_answer,
+                     exercise.response_seconds,
+                     1 if exercise.abandoned else 0)
                     for exercise in self.cognitive_exercises.values()
                 ],
             )
@@ -2182,8 +2197,9 @@ async def voice_intent(
         ) and (awaiting is None or exercise.asked_at > awaiting.asked_at):
             awaiting = exercise
     if awaiting is not None:
+        elapsed = int((now() - awaiting.asked_at).total_seconds()) if awaiting.asked_at else None
         repository.cognitive_exercises[awaiting.id] = awaiting.model_copy(
-            update={"patient_answer": transcript}
+            update={"patient_answer": transcript, "response_seconds": elapsed}
         )
         repository.save_cognitive_exercises()
         return VoiceIntentResult(matched=False, transcript=transcript)
@@ -2263,17 +2279,29 @@ def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(defa
     for offset in range(days, -1, -1):
         day = reference - timedelta(days=offset)
         base_probability = 0.45 + 0.40 * (1 - offset / days)
+        categories = ("recall", "orientation", "naming", "movement")
         for index in range(1 if offset % 3 else 2):
             question, answer = DEMO_QUESTIONS[(offset + index) % len(DEMO_QUESTIONS)]
+            category = categories[(offset + index) % len(categories)]
             correct = ((offset * 37 + index * 53) % 100) < int(base_probability * 100)
             moment = day.replace(hour=10 + index, minute=15, second=0, microsecond=0)
-            exercise = CognitiveExercise(
-                id=uuid4(), memory_id=None, category="recall", question=question,
+            exercise_id = uuid4()
+            repository.cognitive_exercises[exercise_id] = CognitiveExercise(
+                id=exercise_id, memory_id=None, category=category, question=question,
                 expected_answer=answer, created_at=moment, status="completed", correct=correct,
                 answered_at=moment, scheduled_at=moment, asked_at=moment,
                 patient_answer=answer if correct else "No me acuerdo ahora mismo",
+                response_seconds=6 + int(14 * (offset / days)),
             )
-            repository.cognitive_exercises[exercise.id] = exercise
+            exercises_created += 1
+        if offset % 11 == 0:
+            abandoned_at = day.replace(hour=18, minute=0, second=0, microsecond=0)
+            abandoned_id = uuid4()
+            repository.cognitive_exercises[abandoned_id] = CognitiveExercise(
+                id=abandoned_id, memory_id=None, category="recall", question="¿Qué desayunaste hoy?",
+                expected_answer="(libre)", created_at=abandoned_at, status="pending",
+                scheduled_at=abandoned_at, asked_at=abandoned_at, abandoned=True,
+            )
             exercises_created += 1
         if offset % 9 == 0:
             repository.add_event(EventCreate(
@@ -4093,6 +4121,7 @@ def create_cognitive_exercise(
 @app.get("/v1/cognitive-exercises", response_model=list[CognitiveExercise])
 def list_cognitive_exercises(authorization: Optional[str] = Header(default=None)) -> list[CognitiveExercise]:
     require_auth(authorization)
+    refresh_abandoned()
     return sorted(repository.cognitive_exercises.values(), key=lambda item: item.created_at, reverse=True)
 
 
@@ -4145,6 +4174,23 @@ def schedule_cognitive_exercise(
     repository.cognitive_exercises[exercise.id] = exercise
     repository.save_cognitive_exercises()
     return exercise
+
+
+def refresh_abandoned(reference: Optional[datetime] = None) -> int:
+    """Marca como abandonados los ejercicios preguntados sin respuesta (posible frustración)."""
+    reference = reference or now()
+    changed = 0
+    for exercise in list(repository.cognitive_exercises.values()):
+        if (
+            exercise.status == "pending" and exercise.asked_at is not None
+            and exercise.patient_answer is None and not exercise.abandoned
+            and exercise.asked_at < reference - EXERCISE_ABANDON_WINDOW
+        ):
+            repository.cognitive_exercises[exercise.id] = exercise.model_copy(update={"abandoned": True})
+            changed += 1
+    if changed:
+        repository.save_cognitive_exercises()
+    return changed
 
 
 def run_exercise_tick(reference: Optional[datetime] = None) -> int:
@@ -4200,40 +4246,54 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
     require_auth(authorization)
     if days < 7 or days > 180:
         days = 30
+    refresh_abandoned()
     zone = family_zone()
     today = now().astimezone(zone).date()
-    buckets: dict[date, dict[str, int]] = {
-        today - timedelta(days=days - 1 - index): {"exercises": 0, "correct": 0, "alerts": 0, "urgent": 0}
+    buckets: dict[date, dict[str, object]] = {
+        today - timedelta(days=days - 1 - index): {"exercises": 0, "correct": 0, "alerts": 0, "urgent": 0, "abandoned": 0, "responses": []}
         for index in range(days)
     }
     for exercise in repository.cognitive_exercises.values():
-        if exercise.answered_at is None:
-            continue
-        day = exercise.answered_at.astimezone(zone).date()
-        if day in buckets:
-            buckets[day]["exercises"] += 1
-            if exercise.correct:
-                buckets[day]["correct"] += 1
+        if exercise.answered_at is not None:
+            day = exercise.answered_at.astimezone(zone).date()
+            if day in buckets:
+                buckets[day]["exercises"] = int(buckets[day]["exercises"]) + 1
+                if exercise.correct:
+                    buckets[day]["correct"] = int(buckets[day]["correct"]) + 1
+                if exercise.response_seconds is not None:
+                    buckets[day]["responses"].append(exercise.response_seconds)  # type: ignore[union-attr]
+        elif exercise.abandoned and exercise.asked_at is not None:
+            day = exercise.asked_at.astimezone(zone).date()
+            if day in buckets:
+                buckets[day]["abandoned"] = int(buckets[day]["abandoned"]) + 1
     for event in repository.list_events(1000, None):
         day = event.occurred_at.astimezone(zone).date()
         if day in buckets and event.severity in {"urgent", "attention"}:
-            buckets[day]["alerts"] += 1
+            buckets[day]["alerts"] = int(buckets[day]["alerts"]) + 1
             if event.severity == "urgent":
-                buckets[day]["urgent"] += 1
+                buckets[day]["urgent"] = int(buckets[day]["urgent"]) + 1
+
+    def avg_response(bucket: dict[str, object]) -> Optional[float]:
+        responses = bucket["responses"]  # type: ignore[index]
+        return round(sum(responses) / len(responses)) if responses else None
+
     series = [
         StatsDay(
             date=day.isoformat(),
-            exercises=bucket["exercises"],
-            exercises_correct=bucket["correct"],
-            accuracy=round(bucket["correct"] / bucket["exercises"] * 100, 1) if bucket["exercises"] else 0.0,
-            alerts=bucket["alerts"],
-            urgent=bucket["urgent"],
+            exercises=int(bucket["exercises"]),
+            exercises_correct=int(bucket["correct"]),
+            accuracy=round(int(bucket["correct"]) / int(bucket["exercises"]) * 100, 1) if int(bucket["exercises"]) else 0.0,
+            alerts=int(bucket["alerts"]),
+            urgent=int(bucket["urgent"]),
+            abandoned=int(bucket["abandoned"]),
+            avg_response_seconds=avg_response(bucket),
         )
         for day, bucket in sorted(buckets.items())
     ]
     total_exercises = sum(item.exercises for item in series)
     total_correct = sum(item.exercises_correct for item in series)
     overall_accuracy = round(total_correct / total_exercises * 100, 1) if total_exercises else 0.0
+    all_responses = [item.avg_response_seconds for item in series if item.avg_response_seconds is not None]
 
     def accuracy_of(items: list[StatsDay]) -> Optional[float]:
         total = sum(item.exercises for item in items)
@@ -4255,6 +4315,8 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
         summary=StatsSummary(
             exercises_completed=total_exercises, accuracy=overall_accuracy,
             alerts=sum(item.alerts for item in series), trend=trend,
+            abandoned=sum(item.abandoned for item in series),
+            avg_response_seconds=round(sum(all_responses) / len(all_responses)) if all_responses else None,
         ),
     )
 

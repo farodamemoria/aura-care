@@ -67,5 +67,7 @@ def test_seed_demo_history_populates_stats(client: TestClient) -> None:
     assert len(body["days"]) == 30
     with_data = [day for day in body["days"] if day["exercises"]]
     assert len(with_data) >= 10  # varios días con actividad
-    assert body["summary"]["exercises_completed"] >= seeded["exercises"] - 3
+    assert body["summary"]["exercises_completed"] > 10
+    assert body["summary"]["avg_response_seconds"] is not None
+    assert body["summary"]["abandoned"] >= 1
     assert client.post("/v1/admin/seed-demo-history").status_code == 401
