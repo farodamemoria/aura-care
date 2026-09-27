@@ -429,10 +429,11 @@ dialog.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 
   box-shadow: var(--soft-shadow);
 }
 .stats-chart {
-  flex: 1 1 320px; display: flex; align-items: flex-end; gap: 3px; height: 174px; padding: 14px; margin: 0;
+  flex: 1 1 360px; padding: 10px; margin: 0;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--soft-shadow); overflow-x: auto;
 }
+.stats-chart svg { display: block; min-width: 360px; }
 .stat-col { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; flex: 0 0 14px; height: 100%; gap: 2px; }
 .stat-bar { width: 100%; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, var(--family), var(--brand)); transition: height 0.3s ease; }
 .stat-bar.has-alerts { background: linear-gradient(180deg, #e0a63a, #b07a1a); }

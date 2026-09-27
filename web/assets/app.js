@@ -368,8 +368,15 @@ function renderStats(stats) {
   const donut = document.querySelector('#stats-donut');
   if (!stats) { if (summary) summary.textContent = 'Sin datos de estadísticas todavía.'; return; }
   const s = stats.summary;
-  const trend = {mejora: 'mejorando', deterioro: 'en deterioro', estable: 'estable', 'sin-datos': 'sin datos suficientes'}[s.trend] || s.trend;
-  if (summary) summary.textContent = `${s.exercises_completed} ejercicios completados · ${s.accuracy}% de aciertos · ${s.alerts} avisos en 30 días · Tendencia: ${trend}.`;
+  const trend = {
+    mejora: {label: 'mejorando', arrow: '↑', color: 'var(--family)'},
+    deterioro: {label: 'en deterioro', arrow: '↓', color: 'var(--danger)'},
+    estable: {label: 'estable', arrow: '→', color: 'var(--muted)'},
+    'sin-datos': {label: 'sin datos suficientes', arrow: '·', color: 'var(--muted)'},
+  }[s.trend] || {label: s.trend, arrow: '', color: 'var(--muted)'};
+  if (summary) {
+    summary.textContent = `${s.exercises_completed} ejercicios completados · ${s.accuracy}% de aciertos · ${s.alerts} avisos en 30 días · Tendencia: ${trend.arrow} ${trend.label}.`;
+  }
   if (donut) {
     const size = 150, stroke = 16, r = (size - stroke) / 2, circumference = 2 * Math.PI * r;
     const filled = Math.max(0, Math.min(100, s.accuracy)) / 100 * circumference;
@@ -384,23 +391,39 @@ function renderStats(stats) {
   }
   if (chart) {
     chart.replaceChildren();
-    const withExercises = stats.days.filter(day => day.exercises).length;
-    if (!withExercises) {
+    const withData = stats.days.some(day => day.exercises);
+    if (!withData) {
       chart.append(empty('Todavía no hay ejercicios completados en los últimos 30 días.'));
     } else {
-      for (const day of stats.days) {
-        const col = document.createElement('div');
-        col.className = 'stat-col';
-        const bar = document.createElement('div');
-        bar.className = 'stat-bar' + (day.urgent ? ' has-urgent' : day.alerts ? ' has-alerts' : '');
-        bar.style.height = day.exercises ? `${Math.max(day.accuracy, 6)}%` : '0';
-        bar.title = `${day.date}: ${day.exercises} ejercicios, ${day.exercises_correct} correctos (${day.accuracy}%), ${day.alerts} avisos`;
-        const label = document.createElement('span');
-        label.className = 'stat-alerts';
-        label.textContent = day.alerts ? day.alerts : '';
-        col.append(bar, label);
-        chart.append(col);
-      }
+      const W = 640, H = 220, padL = 36, padR = 12, padT = 16, padB = 28;
+      const n = stats.days.length;
+      const x = index => padL + (W - padL - padR) * (n <= 1 ? 0.5 : index / (n - 1));
+      const y = value => padT + (H - padT - padB) * (1 - Math.max(0, Math.min(100, value)) / 100);
+      const points = stats.days.map((day, index) => ({index, acc: day.exercises ? day.accuracy : null}));
+      const filled = points.filter(point => point.acc !== null);
+      const line = filled.map((point, k) => `${k === 0 ? 'M' : 'L'} ${x(point.index).toFixed(1)} ${y(point.acc).toFixed(1)}`).join(' ');
+      const area = filled.length
+        ? `${line} L ${x(filled[filled.length - 1].index).toFixed(1)} ${y(0).toFixed(1)} L ${x(filled[0].index).toFixed(1)} ${y(0).toFixed(1)} Z`
+        : '';
+      const dots = filled.map(point => `<circle cx="${x(point.index).toFixed(1)}" cy="${y(point.acc).toFixed(1)}" r="4" fill="var(--brand)"/>`).join('');
+      const alerts = stats.days.map((day, index) => day.alerts
+        ? `<rect x="${(x(index) - 3).toFixed(1)}" y="${H - padB - 14}" width="6" height="14" rx="2" fill="${day.urgent ? 'var(--danger)' : '#e0a63a'}" opacity="0.85"/>`
+        : '').join('');
+      const grid = [0, 50, 100].map(value =>
+        `<line x1="${padL}" y1="${y(value).toFixed(1)}" x2="${W - padR}" y2="${y(value).toFixed(1)}" stroke="var(--line)"/>` +
+        `<text x="4" y="${(y(value) + 4).toFixed(1)}" font-size="10" fill="var(--muted)">${value}%</text>`).join('');
+      const step = Math.max(1, Math.floor(n / 5));
+      const xlabels = stats.days.map((day, index) => (index % step === 0 || index === n - 1)
+        ? `<text x="${x(index).toFixed(1)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="var(--muted)">${day.date.slice(8, 10)}/${day.date.slice(5, 7)}</text>`
+        : '').join('');
+      chart.innerHTML =
+        `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="Evolución cronológica de aciertos y avisos">` +
+        grid +
+        (area ? `<path d="${area}" fill="var(--calm)" opacity="0.28"/>` : '') +
+        (line ? `<path d="${line}" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>` : '') +
+        dots + alerts + xlabels +
+        `<text x="${padL}" y="11" font-size="10" fill="var(--muted)">azul: % aciertos · ámbar/rojo: avisos (abajo)</text>` +
+        `</svg>`;
     }
   }
   if (list) {
