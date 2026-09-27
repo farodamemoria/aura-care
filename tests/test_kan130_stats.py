@@ -57,3 +57,15 @@ def test_stats_evolution_daily(client: TestClient) -> None:
     assert summary["accuracy"] == 50.0
     assert summary["alerts"] == 1
     assert summary["trend"] in {"mejora", "estable", "deterioro", "sin-datos"}
+
+
+def test_seed_demo_history_populates_stats(client: TestClient) -> None:
+    seeded = client.post("/v1/admin/seed-demo-history?days=30", headers=HEADERS).json()
+    assert seeded["status"] == "ok"
+    assert seeded["exercises"] > 10
+    body = client.get("/v1/stats/evolution?days=30", headers=HEADERS).json()
+    assert len(body["days"]) == 30
+    with_data = [day for day in body["days"] if day["exercises"]]
+    assert len(with_data) >= 10  # varios días con actividad
+    assert body["summary"]["exercises_completed"] >= seeded["exercises"] - 3
+    assert client.post("/v1/admin/seed-demo-history").status_code == 401

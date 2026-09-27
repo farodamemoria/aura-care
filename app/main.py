@@ -2241,6 +2241,50 @@ def reset_cooldowns(authorization: Optional[str] = Header(default=None)) -> dict
     return {"status": "ok", "cleared": cleared}
 
 
+DEMO_QUESTIONS = (
+    ("¿Cómo se llama tu perro?", "Toby"),
+    ("¿En qué año naciste?", "1945"),
+    ("¿Cómo se llaman tus padres?", "Manuel y Carmen"),
+    ("¿Cuántos hijos tienes?", "Tres"),
+    ("¿Dónde vivías de joven?", "En Ourense"),
+    ("¿Cómo se llama tu hija mayor?", "Ana"),
+)
+
+
+@app.post("/v1/admin/seed-demo-history")
+def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(default=None)) -> dict:
+    """Genera historial de demo (ejercicios cognitivos y avisos) para poblar las estadísticas."""
+    require_auth(authorization)
+    if days < 7 or days > 120:
+        days = 45
+    reference = now()
+    exercises_created = 0
+    alerts_created = 0
+    for offset in range(days, -1, -1):
+        day = reference - timedelta(days=offset)
+        base_probability = 0.45 + 0.40 * (1 - offset / days)
+        for index in range(1 if offset % 3 else 2):
+            question, answer = DEMO_QUESTIONS[(offset + index) % len(DEMO_QUESTIONS)]
+            correct = ((offset * 37 + index * 53) % 100) < int(base_probability * 100)
+            moment = day.replace(hour=10 + index, minute=15, second=0, microsecond=0)
+            exercise = CognitiveExercise(
+                id=uuid4(), memory_id=None, category="recall", question=question,
+                expected_answer=answer, created_at=moment, status="completed", correct=correct,
+                answered_at=moment, scheduled_at=moment, asked_at=moment,
+                patient_answer=answer if correct else "No me acuerdo ahora mismo",
+            )
+            repository.cognitive_exercises[exercise.id] = exercise
+            exercises_created += 1
+        if offset % 9 == 0:
+            repository.add_event(EventCreate(
+                kind="hazard", summary="Aviso de ejemplo (historial de demo)", source="glasses",
+                severity="urgent" if offset % 18 == 0 else "attention", occurred_at=day,
+            ))
+            alerts_created += 1
+    repository.save_cognitive_exercises()
+    return {"status": "ok", "exercises": exercises_created, "alerts": alerts_created, "days": days}
+
+
 @app.post("/v1/alerts/test")
 def test_family_alert(authorization: Optional[str] = Header(default=None)) -> dict:
     """Send a test WhatsApp alert to the care network and report the provider result."""
