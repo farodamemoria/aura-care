@@ -384,6 +384,7 @@ function renderStats(stats) {
   }[s.trend] || {label: s.trend, arrow: '', color: 'var(--muted)'};
   if (summary) {
     const extra = [
+      s.movement ? `${s.movement} de movimiento/deporte` : null,
       s.avg_response_seconds != null ? `tiempo medio de respuesta ${s.avg_response_seconds} s` : null,
       s.abandoned ? `${s.abandoned} sin respuesta` : null,
     ].filter(Boolean).join(' · ');

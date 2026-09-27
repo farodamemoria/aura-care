@@ -293,6 +293,7 @@ class StatsDay(BaseModel):
     alerts: int
     urgent: int
     abandoned: int = 0
+    movement: int = 0
     avg_response_seconds: Optional[float] = None
 
 
@@ -302,6 +303,7 @@ class StatsSummary(BaseModel):
     alerts: int
     trend: str
     abandoned: int = 0
+    movement: int = 0
     avg_response_seconds: Optional[float] = None
 
 
@@ -2273,13 +2275,19 @@ def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(defa
     require_auth(authorization)
     if days < 7 or days > 120:
         days = 45
+    # Limpia datos de demo anteriores para que sea re-ejecutable sin duplicar.
+    for demo_id in [item.id for item in repository.cognitive_exercises.values() if item.notes == "demo"]:
+        repository.cognitive_exercises.pop(demo_id, None)
+    with repository.lock:
+        repository.event_db.execute("DELETE FROM events WHERE summary = ?", ("Aviso de ejemplo (historial de demo)",))
+        repository.event_db.commit()
     reference = now()
     exercises_created = 0
     alerts_created = 0
     for offset in range(days, -1, -1):
         day = reference - timedelta(days=offset)
         base_probability = 0.45 + 0.40 * (1 - offset / days)
-        categories = ("recall", "orientation", "naming", "movement")
+        categories = ("recall", "orientation", "naming", "movement", "movement")
         for index in range(1 if offset % 3 else 2):
             question, answer = DEMO_QUESTIONS[(offset + index) % len(DEMO_QUESTIONS)]
             category = categories[(offset + index) % len(categories)]
@@ -2289,17 +2297,18 @@ def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(defa
             repository.cognitive_exercises[exercise_id] = CognitiveExercise(
                 id=exercise_id, memory_id=None, category=category, question=question,
                 expected_answer=answer, created_at=moment, status="completed", correct=correct,
-                answered_at=moment, scheduled_at=moment, asked_at=moment,
+                answered_at=moment, scheduled_at=moment, asked_at=moment, notes="demo",
                 patient_answer=answer if correct else "No me acuerdo ahora mismo",
                 response_seconds=6 + int(14 * (offset / days)),
             )
             exercises_created += 1
-        if offset % 11 == 0:
+        if offset % 5 == 0:
             abandoned_at = day.replace(hour=18, minute=0, second=0, microsecond=0)
             abandoned_id = uuid4()
             repository.cognitive_exercises[abandoned_id] = CognitiveExercise(
-                id=abandoned_id, memory_id=None, category="recall", question="¿Qué desayunaste hoy?",
-                expected_answer="(libre)", created_at=abandoned_at, status="pending",
+                id=abandoned_id, memory_id=None, category="recall",
+                question="¿Qué desayunaste hoy?", expected_answer="(libre)",
+                created_at=abandoned_at, status="pending", notes="demo",
                 scheduled_at=abandoned_at, asked_at=abandoned_at, abandoned=True,
             )
             exercises_created += 1
@@ -4250,7 +4259,7 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
     zone = family_zone()
     today = now().astimezone(zone).date()
     buckets: dict[date, dict[str, object]] = {
-        today - timedelta(days=days - 1 - index): {"exercises": 0, "correct": 0, "alerts": 0, "urgent": 0, "abandoned": 0, "responses": []}
+        today - timedelta(days=days - 1 - index): {"exercises": 0, "correct": 0, "alerts": 0, "urgent": 0, "abandoned": 0, "movement": 0, "responses": []}
         for index in range(days)
     }
     for exercise in repository.cognitive_exercises.values():
@@ -4260,6 +4269,8 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
                 buckets[day]["exercises"] = int(buckets[day]["exercises"]) + 1
                 if exercise.correct:
                     buckets[day]["correct"] = int(buckets[day]["correct"]) + 1
+                if exercise.category == "movement":
+                    buckets[day]["movement"] = int(buckets[day]["movement"]) + 1
                 if exercise.response_seconds is not None:
                     buckets[day]["responses"].append(exercise.response_seconds)  # type: ignore[union-attr]
         elif exercise.abandoned and exercise.asked_at is not None:
@@ -4286,6 +4297,7 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
             alerts=int(bucket["alerts"]),
             urgent=int(bucket["urgent"]),
             abandoned=int(bucket["abandoned"]),
+            movement=int(bucket["movement"]),
             avg_response_seconds=avg_response(bucket),
         )
         for day, bucket in sorted(buckets.items())
@@ -4316,6 +4328,7 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
             exercises_completed=total_exercises, accuracy=overall_accuracy,
             alerts=sum(item.alerts for item in series), trend=trend,
             abandoned=sum(item.abandoned for item in series),
+            movement=sum(item.movement for item in series),
             avg_response_seconds=round(sum(all_responses) / len(all_responses)) if all_responses else None,
         ),
     )
