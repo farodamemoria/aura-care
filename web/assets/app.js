@@ -50,11 +50,17 @@ function confirmAction(message, title = '¿Seguro?') {
 }
 
 function empty(message) { const node = document.createElement('div'); node.className = 'empty'; node.textContent = message; return node; }
-function setBadge(selector, count) {
+const acknowledged = JSON.parse(localStorage.getItem('faroAck') || '{}');
+const currentCounts = {};
+const saveAck = () => localStorage.setItem('faroAck', JSON.stringify(acknowledged));
+const BADGE_KEYS = {'review-badge': 'reviews', 'care-badge': 'care', 'memory-badge': 'memory', 'exercises-badge': 'exercises', 'agenda-badge': 'agenda'};
+function setBadge(selector, key, count) {
+  currentCounts[key] = count;
   const badge = document.querySelector(selector);
   if (!badge) return;
-  badge.hidden = !count;
-  badge.textContent = count;
+  const pending = count - (acknowledged[key] || 0);
+  badge.hidden = pending <= 0;
+  badge.textContent = pending > 0 ? pending : '';
 }
 const isSameDay = (a, b) => a.toDateString() === b.toDateString();
 
@@ -106,11 +112,11 @@ async function load() {
   document.querySelector('#people-count').textContent = people.length;
   document.querySelector('#review-count').textContent = pending.length;
   document.querySelector('#contact-count').textContent = contacts.length;
-  setBadge('#review-badge', pending.length);
-  setBadge('#care-badge', contacts.filter(contact => !contact.alerts_enabled).length);
-  setBadge('#memory-badge', events.filter(event => event.severity === 'urgent' || event.severity === 'attention').length);
-  setBadge('#exercises-badge', exercises.filter(exercise => exercise.status !== 'completed').length);
-  setBadge('#agenda-badge', agenda.filter(event => isSameDay(new Date(event.start_at), new Date())).length);
+  setBadge('#review-badge', 'reviews', pending.length);
+  setBadge('#care-badge', 'care', contacts.filter(contact => !contact.alerts_enabled).length);
+  setBadge('#memory-badge', 'memory', events.filter(event => event.severity === 'urgent' || event.severity === 'attention').length);
+  setBadge('#exercises-badge', 'exercises', exercises.filter(exercise => exercise.status !== 'completed').length);
+  setBadge('#agenda-badge', 'agenda', agenda.filter(event => isSameDay(new Date(event.start_at), new Date())).length);
   document.querySelector('#contact-status').textContent = contacts.length
     ? `Avisos preparados para ${contacts.map(contact => contact.display_name).join(' y ')}.`
     : 'Todavía no hay destinatarios configurados.';
@@ -613,6 +619,16 @@ async function renderReviews(reviews, people) {
 /* --------------------------- Navegación (tabs) -------------------------- */
 
 const tabs = [...document.querySelectorAll('.tab')];
+function acknowledgeTab(tab) {
+  const badge = tab.querySelector('.badge');
+  if (!badge) return;
+  const key = BADGE_KEYS[badge.id];
+  if (!key) return;
+  acknowledged[key] = currentCounts[key] || 0;
+  saveAck();
+  badge.hidden = true;
+  badge.textContent = '';
+}
 function activateTab(tab) {
   tabs.forEach(node => {
     const active = node === tab;
@@ -621,6 +637,7 @@ function activateTab(tab) {
     node.tabIndex = active ? 0 : -1;
     document.querySelector(`#${node.dataset.view}`).classList.toggle('active', active);
   });
+  acknowledgeTab(tab);
 }
 tabs.forEach((tab, index) => {
   tab.tabIndex = tab.classList.contains('active') ? 0 : -1;
