@@ -865,6 +865,26 @@ class DeviceCredentialStatus(BaseModel):
     role: str
 
 
+class DeviceInventoryItem(BaseModel):
+    id: str
+    role: str
+    created_at: datetime
+    revoked: bool
+
+
+class SourceActivity(BaseModel):
+    source: str
+    last_event_at: Optional[datetime] = None
+    events_24h: int = 0
+
+
+class DeviceInventory(BaseModel):
+    devices: list[DeviceInventoryItem]
+    sources: list[SourceActivity]
+    video_consent: bool = False
+    updated_at: datetime
+
+
 class FaceProvider(Protocol):
     def enroll(self, person_id: UUID, images: list[bytes]) -> int: ...
     def search(self, image: bytes) -> list[FaceCandidate]: ...
@@ -1437,6 +1457,49 @@ class InMemoryRepository:
             (conversation_id, limit),
         ).fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+    def device_inventory(self) -> DeviceInventory:
+        """KAN-75 Fase 1: inventario de dispositivos autorizados + actividad por canal."""
+        with self.lock:
+            rows = self.event_db.execute(
+                "SELECT id, role, created_at, revoked_at FROM device_credentials ORDER BY created_at DESC"
+            ).fetchall()
+        devices = [
+            DeviceInventoryItem(
+                id=row["id"], role=row["role"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                revoked=row["revoked_at"] is not None,
+            )
+            for row in rows
+        ]
+        since = (now() - timedelta(hours=24)).isoformat()
+        with self.lock:
+            activity = self.event_db.execute(
+                "SELECT source, MAX(created_at) AS last_at, COUNT(*) AS total FROM events "
+                "WHERE created_at >= ? GROUP BY source",
+                (since,),
+            ).fetchall()
+            consent_row = self.event_db.execute(
+                "SELECT value_json FROM configuration WHERE key='video_consent'"
+            ).fetchone()
+        by_source = {row["source"]: row for row in activity}
+        sources = []
+        for source in ("glasses", "phone", "portal", "backend"):
+            row = by_source.get(source)
+            sources.append(
+                SourceActivity(
+                    source=source,
+                    last_event_at=(datetime.fromisoformat(row["last_at"]) if row and row["last_at"] else None),
+                    events_24h=(int(row["total"]) if row else 0),
+                )
+            )
+        consent = False
+        if consent_row:
+            try:
+                consent = bool(json.loads(consent_row[0]))
+            except (TypeError, ValueError):
+                consent = False
+        return DeviceInventory(devices=devices, sources=sources, video_consent=consent, updated_at=now())
 
     def update_event_metadata(self, event_id: UUID, extra: dict) -> None:
         with self.lock:
@@ -3795,6 +3858,13 @@ def claim_pairing(request: PairingClaim) -> PairingResult:
         care_circle_id=invite["care_circle_id"], role=invite["role"], linked=True,
         device_credential=device_credential,
     )
+
+
+@app.get("/v1/devices", response_model=DeviceInventory)
+def list_devices(authorization: Optional[str] = Header(default=None)) -> DeviceInventory:
+    """KAN-75 Fase 1: inventario de dispositivos autorizados y actividad reciente por canal."""
+    require_auth(authorization)
+    return repository.device_inventory()
 
 
 @app.post("/v1/device-credentials/validate", response_model=DeviceCredentialStatus)

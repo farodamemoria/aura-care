@@ -84,12 +84,13 @@ function icon(name, size = 16) {
 }
 
 async function load() {
-  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas'];
+  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos'];
   const requests = [
     api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
     api('/v1/events?limit=500'), api('/v1/location-sessions/active'),
     api('/v1/cognitive-exercises'), api('/v1/cognitive-exercises/summary'), api('/v1/calendar-events'),
     api('/v1/stats/evolution?days=30'),
+    api('/v1/devices'),
   ];
   const settled = await Promise.allSettled(requests);
   const failed = [];
@@ -109,11 +110,13 @@ async function load() {
   const exerciseSummary = pick(7);
   const agenda = pick(8) || [];
   const stats = pick(9);
+  const devices = pick(10);
 
   const pending = reviews.filter(review => review.status === 'pending');
   document.querySelector('#people-count').textContent = people.length;
   document.querySelector('#review-count').textContent = pending.length;
   document.querySelector('#contact-count').textContent = contacts.length;
+  document.querySelector('#device-count').textContent = devices ? devices.devices.filter(device => !device.revoked).length : 0;
   setBadge('#review-badge', 'reviews', pending.length);
   setBadge('#care-badge', 'care', contacts.filter(contact => !contact.alerts_enabled).length);
   setBadge('#memory-badge', 'memory', events.filter(event => event.severity === 'urgent' || event.severity === 'attention').length);
@@ -128,6 +131,7 @@ async function load() {
 
   if (patient) { fillPatient(patient); await renderPatientPhoto(patient); }
   renderCareContacts(contacts, people);
+  renderDevices(devices);
   populateKnownPersonOptions(people);
   renderPeople(people);
   await renderReviews(pending, people);
@@ -708,6 +712,44 @@ function renderPeople(people) {
     target.append(node);
   }
   if (!people.length) target.append(empty('Aún no hay personas conocidas. Añade la primera para comenzar.'));
+}
+
+function renderDevices(inventory) {
+  const target = document.querySelector('#devices');
+  if (!target) return;
+  target.replaceChildren();
+  if (!inventory) {
+    target.append(empty('No se pudo cargar el inventario de dispositivos.'));
+    return;
+  }
+  const labels = {glasses: 'Gafas', phone: 'Móvil', portal: 'Portal', backend: 'Servicio'};
+  inventory.sources.forEach(source => {
+    const card = document.createElement('article'); card.className = 'device-card';
+    const title = document.createElement('strong'); title.textContent = labels[source.source] || source.source;
+    const state = document.createElement('p');
+    state.textContent = source.last_event_at
+      ? `Última actividad: ${new Date(source.last_event_at).toLocaleString()} · ${source.events_24h} evento(s) en 24 h`
+      : 'Sin actividad en las últimas 24 h';
+    card.append(title, state);
+    target.append(card);
+  });
+  inventory.devices.forEach(device => {
+    const card = document.createElement('article'); card.className = 'device-card';
+    const title = document.createElement('strong'); title.textContent = `Dispositivo autorizado · ${device.role}`;
+    const meta = document.createElement('p');
+    meta.textContent = `Desde el ${new Date(device.created_at).toLocaleDateString()}${device.revoked ? ' · revocado' : ''}`;
+    card.append(title, meta);
+    target.append(card);
+  });
+  const consent = document.createElement('article'); consent.className = 'device-card';
+  const consentTitle = document.createElement('strong'); consentTitle.textContent = 'Vídeo en directo';
+  const consentText = document.createElement('p');
+  consentText.textContent = inventory.video_consent
+    ? 'Consentimiento activo: la transmisión llegará en la fase 2.'
+    : 'Pendiente de consentimiento (fase 2 de KAN-75).';
+  consent.append(consentTitle, consentText);
+  target.append(consent);
+  if (!target.children.length) target.append(empty('Todavía no hay dispositivos autorizados.'));
 }
 
 async function renderReviews(reviews, people) {

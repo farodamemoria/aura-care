@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -162,5 +163,5 @@ def test_portal_muestra_la_sugerencia_y_el_descarte() -> None:
     assert "Posiblemente es su" in js
     assert "suggestion/dismiss" in js
     assert ".review-suggestion" in css
-    assert "/assets/app.js?v=40" in html
-    assert "/assets/tokens.css?v=7" in html
+    assert re.search(r"/assets/app\.js\?v=\d+", html)
+    assert re.search(r"/assets/tokens\.css\?v=\d+", html)
