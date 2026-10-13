@@ -166,6 +166,38 @@ function alertDetails(event) {
 let loadedEvents = [];
 const MEMORY_PAGE = 25;
 let memoryPage = 1;
+let memoryDay = '';
+
+function hourMatches(event, from, to) {
+  if (from === '' && to === '') return true;
+  const hour = new Date(event.occurred_at).getHours();
+  if (from !== '' && hour < Number(from)) return false;
+  if (to !== '' && hour > Number(to)) return false;
+  return true;
+}
+
+async function refreshMemoryDay() {
+  const params = new URLSearchParams({limit: '500'});
+  if (memoryDay) {
+    params.set('since', new Date(`${memoryDay}T00:00:00`).toISOString());
+    params.set('until', new Date(`${memoryDay}T23:59:59.999`).toISOString());
+  }
+  try { loadedEvents = await api(`/v1/events?${params.toString()}`); }
+  catch (error) { notify(error); return; }
+  memoryPage = 1;
+  renderMemory();
+}
+
+function shiftMemoryDay(delta) {
+  const base = memoryDay ? new Date(`${memoryDay}T12:00:00`) : new Date();
+  base.setDate(base.getDate() + delta);
+  const yyyy = base.getFullYear();
+  const mm = String(base.getMonth() + 1).padStart(2, '0');
+  const dd = String(base.getDate()).padStart(2, '0');
+  memoryDay = `${yyyy}-${mm}-${dd}`;
+  document.querySelector('#event-date').value = memoryDay;
+  refreshMemoryDay();
+}
 
 function dayLabel(date) {
   const today = new Date(), yesterday = new Date();
@@ -226,9 +258,12 @@ function renderMemory(events) {
   const delivery = document.querySelector('#delivery-filter').value;
   const order = document.querySelector('#event-order').value;
   const query = document.querySelector('#event-search').value.trim().toLowerCase();
+  const hourFrom = document.querySelector('#event-hour-from') ? document.querySelector('#event-hour-from').value : '';
+  const hourTo = document.querySelector('#event-hour-to') ? document.querySelector('#event-hour-to').value : '';
 
   const filtered = loadedEvents
     .filter(event => eventMatches(event, kind, severity, delivery, query))
+    .filter(event => hourMatches(event, hourFrom, hourTo))
     .sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at));
   const total = filtered.length;
   if (order === 'oldest') filtered.reverse();
@@ -992,6 +1027,20 @@ if (clearHistory) clearHistory.addEventListener('click', async () => {
 for (const filter of ['#event-filter', '#severity-filter', '#delivery-filter', '#event-order']) document.querySelector(filter).onchange = () => renderMemory();
 let searchTimer = null;
 document.querySelector('#event-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { memoryPage = 1; renderMemory(); }, 220); });
+for (const id of ['#event-hour-from', '#event-hour-to']) {
+  const select = document.querySelector(id);
+  for (let hour = 0; hour < 24; hour += 1) {
+    const option = document.createElement('option');
+    option.value = String(hour);
+    option.textContent = `${String(hour).padStart(2, '0')}:00`;
+    select.append(option);
+  }
+  select.onchange = () => { memoryPage = 1; renderMemory(); };
+}
+document.querySelector('#event-date').onchange = event => { memoryDay = event.target.value || ''; refreshMemoryDay(); };
+document.querySelector('#event-prev-day').onclick = () => shiftMemoryDay(-1);
+document.querySelector('#event-next-day').onclick = () => shiftMemoryDay(1);
+document.querySelector('#event-today').onclick = () => { memoryDay = ''; document.querySelector('#event-date').value = ''; refreshMemoryDay(); };
 document.querySelector('#pair').onclick = async () => { try { const invite = await api('/v1/pairing-invites', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({role: document.querySelector('#pair-role').value})}); document.querySelector('#pair-code').textContent = invite.code; toast('Código creado. Caduca en 10 minutos.', 'success'); } catch (error) { notify(error); } };
 
 /* ------------------------------ Voz / chat ------------------------------ */
