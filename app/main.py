@@ -1419,12 +1419,26 @@ class InMemoryRepository:
             self.event_db.commit()
         return event
 
-    def list_events(self, limit: int, kind: Optional[str]) -> list[Event]:
+    def list_events(self, limit: int, kind: Optional[str], since: Optional[datetime] = None,
+                    until: Optional[datetime] = None, search: Optional[str] = None) -> list[Event]:
         query = "SELECT * FROM events"
+        clauses: list[str] = []
         params: list[object] = []
         if kind:
-            query += " WHERE kind = ?"
+            clauses.append("kind = ?")
             params.append(kind)
+        if since is not None:
+            clauses.append("occurred_at >= ?")
+            params.append(since.isoformat())
+        if until is not None:
+            clauses.append("occurred_at <= ?")
+            params.append(until.isoformat())
+        if search:
+            clauses.append("(summary LIKE ? OR metadata_json LIKE ?)")
+            pattern = f"%{search}%"
+            params.extend([pattern, pattern])
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY occurred_at DESC LIMIT ?"
         params.append(limit)
         return [Event(
@@ -3101,6 +3115,9 @@ def clear_events(authorization: Optional[str] = Header(default=None)) -> dict:
 def list_events(
     limit: int = 100,
     kind: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    search: Optional[str] = None,
     authorization: Optional[str] = Header(default=None),
 ) -> list[Event]:
     require_auth(authorization)
@@ -3109,7 +3126,9 @@ def list_events(
     allowed = {"conversation", "episode", "help_request", "location", "recognition", "caregiver_action", "hazard", "object_location", "routine", "system"}
     if kind is not None and kind not in allowed:
         raise HTTPException(status_code=422, detail="Unknown event kind")
-    return repository.list_events(limit, kind)
+    if search is not None and len(search) > 120:
+        raise HTTPException(status_code=422, detail="Search too long")
+    return repository.list_events(limit, kind, since, until, search)
 
 
 @app.get("/v1/conversation-memory/search", response_model=list[ConversationMemoryMatch])

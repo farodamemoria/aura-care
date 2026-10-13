@@ -155,6 +155,12 @@
           <option value="sent">Familia avisada</option>
           <option value="not_sent">Sin aviso familiar</option>
         </select></label>
+        <label><span class="visually-hidden">Día</span><input id="event-date" type="date" aria-label="Filtrar por día"></label>
+        <label><span class="visually-hidden">Hora desde</span><select id="event-hour-from" aria-label="Hora desde"><option value="">Desde cualquier hora</option></select></label>
+        <label><span class="visually-hidden">Hora hasta</span><select id="event-hour-to" aria-label="Hora hasta"><option value="">Hasta cualquier hora</option></select></label>
+        <button id="event-prev-day" class="secondary" type="button" title="Día anterior">← Día anterior</button>
+        <button id="event-today" class="secondary" type="button" title="Ir a hoy">Hoy</button>
+        <button id="event-next-day" class="secondary" type="button" title="Día siguiente">Día siguiente →</button>
         <button id="clear-history" class="text-danger" type="button" title="Borrar todo el historial de la memoria">Limpiar historial</button>
       </div>
       <article id="tracking-status" class="tracking-card" hidden></article>
@@ -249,6 +255,6 @@
       </div>
     </div>
   </dialog>
-  <script src="/assets/app.js?v=42" defer></script>
+  <script src="/assets/app.js?v=43" defer></script>
 </body>
 </html>
