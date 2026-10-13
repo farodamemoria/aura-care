@@ -485,3 +485,13 @@ dialog.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 
 .review-suggestion-text { font-weight: 600; }
 .review-suggestion-context { color: var(--muted, #5c6f6a); font-size: 0.9em; }
 .review-suggestion button { align-self: flex-start; }
+
+/* KAN-75 Fase 1: inventario y estado de dispositivos. */
+.devices-panel { margin-top: 14px; }
+.device-list { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.device-card {
+  padding: 12px 14px; border-radius: var(--radius, 12px);
+  border: 1px solid var(--line, #d8e2dc); background: #fff;
+}
+.device-card p { margin: 2px 0; color: var(--muted, #5c6f6a); font-size: 0.92em; }
+.device-card strong { display: block; color: var(--brand, #0b4f6c); }

@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="/assets/patient.css?v=2">
   <link rel="stylesheet" href="/assets/family.css?v=4">
   <link rel="stylesheet" href="/assets/agenda.css?v=2">
-  <link rel="stylesheet" href="/assets/tokens.css?v=7">
+  <link rel="stylesheet" href="/assets/tokens.css?v=8">
 </head>
 <body>
   <a class="visually-hidden" href="#main">Saltar al contenido</a>
@@ -48,6 +48,10 @@
       <article><strong id="people-count">0</strong><span>personas conocidas</span></article>
       <article><strong id="review-count">0</strong><span>por identificar</span></article>
       <article><strong id="contact-count">0</strong><span>contactos preparados</span></article>
+      <article><strong id="device-count">0</strong><span>dispositivos autorizados</span></article>
+    </section>
+    <section class="reveal devices-panel" aria-label="Dispositivos">
+      <div id="devices" class="device-list"></div>
     </section>
     <nav class="tabs" aria-label="Secciones" role="tablist">
       <button id="tab-patient" class="tab active" role="tab" aria-selected="true" aria-controls="patient-view" data-view="patient-view">Paciente</button>
@@ -245,6 +249,6 @@
       </div>
     </div>
   </dialog>
-  <script src="/assets/app.js?v=40" defer></script>
+  <script src="/assets/app.js?v=41" defer></script>
 </body>
 </html>
