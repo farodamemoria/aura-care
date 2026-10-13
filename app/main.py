@@ -885,6 +885,30 @@ class DeviceInventory(BaseModel):
     updated_at: datetime
 
 
+class VideoConsentUpdate(BaseModel):
+    granted: bool
+    notes: str = Field(default="", max_length=300)
+
+
+class LiveViewRequestCreate(BaseModel):
+    source: str = Field(pattern="^(glasses|phone)$")
+    reason: str = Field(default="", max_length=300)
+
+
+class LiveViewStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(active|completed|cancelled|denied)$")
+
+
+class LiveViewRequest(BaseModel):
+    id: UUID
+    source: str
+    requester: str
+    reason: str = ""
+    status: str = Field(pattern="^(pending|active|completed|cancelled|denied)$")
+    created_at: datetime
+    updated_at: datetime
+
+
 class FaceProvider(Protocol):
     def enroll(self, person_id: UUID, images: list[bytes]) -> int: ...
     def search(self, image: bytes) -> list[FaceCandidate]: ...
@@ -1099,6 +1123,7 @@ class InMemoryRepository:
         self.cognitive_exercises: dict[UUID, CognitiveExercise] = {}
         self.calendar_events: dict[UUID, CalendarEvent] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
+        self.live_views: dict[UUID, LiveViewRequest] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
         self.last_outcome: dict[str, datetime] = {}
         self.last_review_created: dict[str, datetime] = {}
@@ -1299,6 +1324,11 @@ class InMemoryRepository:
             for raw in json.loads(locations_row[0]):
                 session = LocationSession.model_validate(raw)
                 self.location_sessions[session.id] = session
+        views_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='live_views'").fetchone()
+        if views_row:
+            for raw in json.loads(views_row[0]):
+                view = LiveViewRequest.model_validate(raw)
+                self.live_views[view.id] = view
         self.lock = Lock()
         self.purge_expired_reviews()
 
@@ -1457,6 +1487,32 @@ class InMemoryRepository:
             (conversation_id, limit),
         ).fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+    def save_live_views(self) -> None:
+        with self.lock:
+            self.event_db.execute(
+                "INSERT OR REPLACE INTO configuration(key, value_json) VALUES('live_views', ?)",
+                (json.dumps([view.model_dump(mode="json") for view in self.live_views.values()], ensure_ascii=False),),
+            )
+            self.event_db.commit()
+
+    def video_consent(self) -> bool:
+        with self.lock:
+            row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='video_consent'").fetchone()
+        if not row:
+            return False
+        try:
+            return bool(json.loads(row[0]))
+        except (TypeError, ValueError):
+            return False
+
+    def set_video_consent(self, granted: bool) -> None:
+        with self.lock:
+            self.event_db.execute(
+                "INSERT OR REPLACE INTO configuration(key, value_json) VALUES('video_consent', ?)",
+                (json.dumps(granted),),
+            )
+            self.event_db.commit()
 
     def device_inventory(self) -> DeviceInventory:
         """KAN-75 Fase 1: inventario de dispositivos autorizados + actividad por canal."""
@@ -3858,6 +3914,71 @@ def claim_pairing(request: PairingClaim) -> PairingResult:
         care_circle_id=invite["care_circle_id"], role=invite["role"], linked=True,
         device_credential=device_credential,
     )
+
+
+@app.put("/v1/devices/video-consent", response_model=DeviceInventory)
+def update_video_consent(request: VideoConsentUpdate, authorization: Optional[str] = Header(default=None)) -> DeviceInventory:
+    """KAN-75 Fase 2: consentimiento configurable para video en directo (con auditoria)."""
+    require_auth(authorization)
+    repository.set_video_consent(request.granted)
+    repository.add_event(EventCreate(
+        kind="caregiver_action",
+        summary=("Consentimiento de video en directo " + ("activado" if request.granted else "retirado")
+                 + (f": {request.notes}" if request.notes else "")),
+        source="portal",
+        severity="info",
+        metadata={"action": "video_consent", "granted": request.granted},
+    ))
+    return repository.device_inventory()
+
+
+@app.get("/v1/live-views", response_model=list[LiveViewRequest])
+def list_live_views(authorization: Optional[str] = Header(default=None)) -> list[LiveViewRequest]:
+    require_auth(authorization)
+    return sorted(repository.live_views.values(), key=lambda item: item.created_at, reverse=True)
+
+
+@app.post("/v1/live-views", response_model=LiveViewRequest, status_code=201)
+def create_live_view(request: LiveViewRequestCreate, authorization: Optional[str] = Header(default=None)) -> LiveViewRequest:
+    """KAN-75 Fase 2: solicitud de transmision en directo; requiere consentimiento activo."""
+    require_auth(authorization)
+    if not repository.video_consent():
+        raise HTTPException(status_code=409, detail="Video consent is not granted")
+    moment = now()
+    view = LiveViewRequest(
+        id=uuid4(), source=request.source, requester="portal", reason=request.reason,
+        status="pending", created_at=moment, updated_at=moment,
+    )
+    repository.live_views[view.id] = view
+    repository.save_live_views()
+    repository.add_event(EventCreate(
+        kind="caregiver_action",
+        summary=f"Solicitud de transmision en directo ({request.source})",
+        source="portal",
+        severity="info",
+        metadata={"action": "live_view_request", "source": request.source, "status": "pending"},
+    ))
+    return view
+
+
+@app.post("/v1/live-views/{view_id}/status", response_model=LiveViewRequest)
+def update_live_view_status(view_id: UUID, request: LiveViewStatusUpdate, authorization: Optional[str] = Header(default=None)) -> LiveViewRequest:
+    """KAN-75 Fase 2: transiciones auditadas de la solicitud (activa/terminada/cancelada/denegada)."""
+    require_auth(authorization)
+    view = repository.live_views.get(view_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Live view request not found")
+    updated = view.model_copy(update={"status": request.status, "updated_at": now()})
+    repository.live_views[view.id] = updated
+    repository.save_live_views()
+    repository.add_event(EventCreate(
+        kind="caregiver_action",
+        summary=f"Transmision en directo ({view.source}): {request.status}",
+        source="portal",
+        severity="info",
+        metadata={"action": "live_view_status", "source": view.source, "status": request.status},
+    ))
+    return updated
 
 
 @app.get("/v1/devices", response_model=DeviceInventory)
