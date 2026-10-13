@@ -2587,6 +2587,46 @@ DEMO_QUESTIONS = (
     ("¿Cómo se llama tu hija mayor?", "Ana"),
 )
 
+DAILY_GENERIC_QUESTIONS = (
+    ("orientation", "¿Qué día de la semana es hoy?"),
+    ("orientation", "¿En qué estación del año estamos?"),
+    ("recall", "Nombra tres cosas que hayas comido esta semana."),
+    ("recall", "¿Qué has hecho esta mañana?"),
+    ("naming", "Nombra tres animales que te gusten."),
+    ("naming", "Nombra tres colores que veas a tu alrededor."),
+    ("movement", "Mueve los brazos despacio durante diez segundos."),
+    ("movement", "Da cinco pasos por la habitación con cuidado."),
+)
+DAILY_GENERIC_COUNT = 3
+
+
+def ensure_daily_generic_exercises(reference: Optional[datetime] = None) -> int:
+    """KAN-131: crea una sola vez por dia ejercicios genericos proactivos (rotacion por dia)."""
+    moment = reference or now()
+    zone = family_zone()
+    local_moment = moment.astimezone(zone)
+    day = local_moment.date()
+    already = any(
+        exercise.notes == "auto-daily" and exercise.scheduled_at is not None
+        and exercise.scheduled_at.astimezone(zone).date() == day
+        for exercise in repository.cognitive_exercises.values()
+    )
+    if already:
+        return 0
+    created = 0
+    for offset in range(DAILY_GENERIC_COUNT):
+        category, question = DAILY_GENERIC_QUESTIONS[(day.toordinal() + offset) % len(DAILY_GENERIC_QUESTIONS)]
+        scheduled = local_moment.replace(hour=10 + offset, minute=30, second=0, microsecond=0)
+        exercise = CognitiveExercise(
+            id=uuid4(), memory_id=None, category=category, question=question,
+            expected_answer="", created_at=moment, status="pending", notes="auto-daily",
+            scheduled_at=scheduled,
+        )
+        repository.cognitive_exercises[exercise.id] = exercise
+        created += 1
+    repository.save_cognitive_exercises()
+    return created
+
 
 @app.post("/v1/admin/seed-demo-history")
 def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(default=None)) -> dict:
@@ -4620,6 +4660,7 @@ def refresh_abandoned(reference: Optional[datetime] = None) -> int:
 
 def run_exercise_tick(reference: Optional[datetime] = None) -> int:
     reference = reference or now()
+    ensure_daily_generic_exercises(reference)
     asked = 0
     for exercise in list(repository.cognitive_exercises.values()):
         if exercise.status != "pending" or exercise.scheduled_at is None or exercise.asked_at is not None:
@@ -4637,6 +4678,13 @@ def run_exercise_tick(reference: Optional[datetime] = None) -> int:
 def cognitive_exercise_tick(at: Optional[datetime] = None, authorization: Optional[str] = Header(default=None)) -> dict:
     require_auth(authorization)
     return {"asked": run_exercise_tick(at)}
+
+
+@app.post("/v1/cognitive-exercises/auto-daily")
+def generate_daily_generic_exercises(authorization: Optional[str] = Header(default=None)) -> dict:
+    """KAN-131: fuerza la generacion diaria de ejercicios genericos (idempotente por dia)."""
+    require_auth(authorization)
+    return {"created": ensure_daily_generic_exercises()}
 
 
 @app.get("/v1/cognitive-exercises/report", response_model=CognitiveExerciseReport)
