@@ -474,3 +474,14 @@ dialog.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: 
 @media (min-width: 481px) {
   .hero { padding-top: max(27px, env(safe-area-inset-top, 0px)); }
 }
+
+/* KAN-67: hipotesis de identidad sugerida en las capturas por aclarar. */
+.review-suggestion {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border-radius: var(--radius, 12px);
+  border: 1px solid var(--line, #d8e2dc); background: rgba(167, 216, 240, 0.16);
+}
+.review-suggestion p { margin: 0; }
+.review-suggestion-text { font-weight: 600; }
+.review-suggestion-context { color: var(--muted, #5c6f6a); font-size: 0.9em; }
+.review-suggestion button { align-self: flex-start; }
