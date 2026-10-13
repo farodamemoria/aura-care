@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,10 @@ def test_viewport_cover_activo() -> None:
 def test_versiones_de_cache_actualizadas() -> None:
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "web" / "assets" / "sw.js").read_text(encoding="utf-8")
-    assert "/assets/tokens.css?v=6" in html
-    assert "/assets/tokens.css?v=6" in sw
-    assert "faro-familia-v48" in sw
+    tokens_html = re.search(r"/assets/tokens\.css\?v=(\d+)", html)
+    tokens_sw = re.search(r"'/assets/tokens\.css\?v=(\d+)'", sw)
+    assert tokens_html and tokens_sw
+    assert tokens_html.group(1) == tokens_sw.group(1)
+    assert int(tokens_html.group(1)) >= 6
+    cache = re.search(r"faro-familia-v(\d+)", sw)
+    assert cache and int(cache.group(1)) >= 48

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Optional, Protocol, Union
+from typing import Annotated, Optional, Protocol, Sequence, Union
 from uuid import UUID, uuid4
 import secrets
 import hashlib
@@ -399,6 +399,16 @@ class RecognitionResult(BaseModel):
     is_patient: bool = False
 
 
+class ReviewSuggestion(BaseModel):
+    relationship: str = Field(min_length=1, max_length=40)
+    display_name: Optional[str] = Field(default=None, max_length=80)
+    person_id: Optional[UUID] = None
+    confidence: str = Field(pattern="^(high|medium)$")
+    context: str = Field(default="", max_length=200)
+    created_at: datetime
+    dismissed: bool = False
+
+
 class ReviewItem(BaseModel):
     id: UUID
     created_at: datetime
@@ -406,10 +416,159 @@ class ReviewItem(BaseModel):
     candidate_person_ids: list[UUID]
     confidences: list[float]
     resolved_person_id: Optional[UUID] = None
+    suggestion: Optional[ReviewSuggestion] = None
 
 
 class ReviewResolution(BaseModel):
     person_id: Optional[UUID] = None
+
+
+KINSHIP_TERMS: dict[str, tuple[str, ...]] = {
+    "hija": ("hija", "filla"),
+    "hijo": ("hijo", "fillo"),
+    "nieta": ("nieta",),
+    "nieto": ("nieto",),
+    "esposa": ("esposa", "mujer", "muller"),
+    "marido": ("marido",),
+    "hermana": ("hermana", "irmá", "irma"),
+    "hermano": ("hermano", "irmán", "irman"),
+    "madre": ("madre", "nai"),
+    "padre": ("padre", "pai"),
+    "cuidadora": ("cuidadora",),
+    "cuidador": ("cuidador",),
+    "sobrina": ("sobrina",),
+    "sobrino": ("sobrino",),
+    "prima": ("prima",),
+    "primo": ("primo",),
+    "vecina": ("vecina",),
+    "vecino": ("vecino",),
+}
+
+REVIEW_SUGGESTION_STOP_NAMES = {
+    "es", "é", "esta", "está", "mi", "miña", "a", "de", "y", "que", "no", "le",
+    "se", "tiene", "quere", "vai", "ven", "viene", "estaba", "co", "con",
+}
+
+
+def suggest_identity_from_transcripts(transcripts: Sequence[str]) -> Optional[dict]:
+    """Hipotesis de parentesco a partir de transcripciones recientes.
+
+    Reglas conservadoras: solo sugiere con UNA persona nombrada (confianza alta) o UNA
+    relacion sin nombre (confianza media). Con varias personas distintas o sin contexto, None.
+    """
+    surfaces = {surface: canonical for canonical, forms in KINSHIP_TERMS.items() for surface in forms}
+    relation_alternation = "|".join(sorted((re.escape(surface) for surface in surfaces), key=len, reverse=True))
+    name_pattern = r"([A-ZÁÉÍÓÚÑ][a-záéíóúñü]{1,20})"
+    hypotheses: dict[tuple[str, Optional[str]], dict] = {}
+
+    def add(relationship: Optional[str], name: Optional[str], text: str) -> None:
+        if relationship is None:
+            return
+        if name is not None and name in REVIEW_SUGGESTION_STOP_NAMES:
+            name = None
+        key = (relationship, name)
+        if key not in hypotheses:
+            hypotheses[key] = {
+                "relationship": relationship,
+                "name": name,
+                "context": " ".join((text or "").split())[:200],
+            }
+
+    for text in transcripts:
+        original = text or ""
+        if not original.strip():
+            continue
+        for match in re.finditer(
+            rf"(?:mi|a miña|miña)\s+({relation_alternation})\s+{name_pattern}",
+            original,
+            flags=re.IGNORECASE,
+        ):
+            add(surfaces.get(match.group(1).lower()), match.group(2), original)
+        for match in re.finditer(
+            rf"{name_pattern}\s+(?:es|é)\s+(?:mi|a miña)\s+({relation_alternation})",
+            original,
+            flags=re.IGNORECASE,
+        ):
+            add(surfaces.get(match.group(2).lower()), match.group(1), original)
+        for match in re.finditer(
+            rf"(?:mi|a miña|miña)\s+({relation_alternation})\b",
+            original,
+            flags=re.IGNORECASE,
+        ):
+            add(surfaces.get(match.group(1).lower()), None, original)
+
+    named = {key: value for key, value in hypotheses.items() if value["name"]}
+    named_values = {value["name"].casefold() for value in named.values()}
+    if len(named_values) > 1:
+        return None
+    if len(named_values) == 1:
+        value = next(iter(named.values()))
+        return {
+            "relationship": value["relationship"],
+            "display_name": value["name"],
+            "confidence": "high",
+            "context": value["context"],
+        }
+    relationships = {value["relationship"] for value in hypotheses.values()}
+    if len(relationships) == 1 and hypotheses:
+        value = next(iter(hypotheses.values()))
+        return {
+            "relationship": value["relationship"],
+            "display_name": None,
+            "confidence": "medium",
+            "context": value["context"],
+        }
+    return None
+
+
+def _load_review_suggestion(raw: Optional[str]) -> Optional[ReviewSuggestion]:
+    if not raw:
+        return None
+    try:
+        return ReviewSuggestion.model_validate(json.loads(raw))
+    except Exception:
+        return None
+
+
+def recent_conversation_transcripts(limit: int = 60, window_minutes: int = 15) -> list[str]:
+    """Transcripciones de conversacion recientes (mas antigua primero) para la hipotesis."""
+    since = now() - timedelta(minutes=window_minutes)
+    try:
+        events = repository.list_events(limit, "conversation")
+    except Exception:
+        return []
+    transcripts = []
+    for event in events:
+        if event.created_at < since:
+            continue
+        metadata = event.metadata or {}
+        if metadata.get("transcript"):
+            transcripts.append(event.summary)
+    transcripts.reverse()
+    return transcripts
+
+
+def build_review_suggestion() -> Optional[ReviewSuggestion]:
+    """Sugerencia para una revision nueva; nunca confirma identidades por si sola."""
+    hypothesis = suggest_identity_from_transcripts(recent_conversation_transcripts())
+    if hypothesis is None:
+        return None
+    person_id = None
+    display_name = hypothesis.get("display_name")
+    if display_name:
+        wanted = display_name.casefold()
+        for person in repository.people.values():
+            if person.display_name.casefold() == wanted:
+                person_id = person.id
+                break
+    return ReviewSuggestion(
+        relationship=hypothesis["relationship"],
+        display_name=display_name,
+        person_id=person_id,
+        confidence=hypothesis["confidence"],
+        context=hypothesis.get("context", "")[:200],
+        created_at=now(),
+    )
 
 
 class PostalAddress(BaseModel):
@@ -994,6 +1153,9 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, created_at TEXT NOT NULL, status TEXT NOT NULL,
             candidate_person_ids TEXT NOT NULL, confidences TEXT NOT NULL, resolved_person_id TEXT
         )""")
+        review_columns = {row["name"] for row in self.event_db.execute("PRAGMA table_info(reviews)").fetchall()}
+        if "suggestion_json" not in review_columns:
+            self.event_db.execute("ALTER TABLE reviews ADD COLUMN suggestion_json TEXT")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS family_messages (
             id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
             content TEXT NOT NULL, created_at TEXT NOT NULL
@@ -1104,6 +1266,7 @@ class InMemoryRepository:
                 candidate_person_ids=[UUID(value) for value in json.loads(row["candidate_person_ids"])],
                 confidences=list(json.loads(row["confidences"])),
                 resolved_person_id=(UUID(row["resolved_person_id"]) if row["resolved_person_id"] else None),
+                suggestion=_load_review_suggestion(row["suggestion_json"] if "suggestion_json" in row.keys() else None),
             )
             self.reviews[review.id] = review
         contacts_row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='care_contacts'").fetchone()
@@ -1126,16 +1289,17 @@ class InMemoryRepository:
         self.reviews[review.id] = review
         with self.lock:
             self.event_db.execute(
-                "INSERT INTO reviews(id, created_at, status, candidate_person_ids, confidences, resolved_person_id) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "INSERT INTO reviews(id, created_at, status, candidate_person_ids, confidences, resolved_person_id, suggestion_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET status=excluded.status, "
                 "candidate_person_ids=excluded.candidate_person_ids, confidences=excluded.confidences, "
-                "resolved_person_id=excluded.resolved_person_id",
+                "resolved_person_id=excluded.resolved_person_id, suggestion_json=excluded.suggestion_json",
                 (
                     str(review.id), review.created_at.isoformat(), review.status,
                     json.dumps([str(person_id) for person_id in review.candidate_person_ids]),
                     json.dumps(review.confidences),
                     (str(review.resolved_person_id) if review.resolved_person_id else None),
+                    (review.suggestion.model_dump_json() if review.suggestion else None),
                 ),
             )
             self.event_db.commit()
@@ -3798,7 +3962,11 @@ def recognize(request: Request, files: Annotated[list[UploadFile], File()], auth
     if repository.last_review_created.get(review_key, datetime.min.replace(tzinfo=timezone.utc)) > now() - REVIEW_COOLDOWN:
         return RecognitionResult(status="unknown", confidence=confidence, reason="Recent pending review; duplicate suppressed")
     repository.last_review_created[review_key] = now()
-    review = ReviewItem(id=uuid4(), created_at=now(), status="pending", candidate_person_ids=[], confidences=[candidate.confidence for candidate in candidates])
+    review = ReviewItem(
+        id=uuid4(), created_at=now(), status="pending", candidate_person_ids=[],
+        confidences=[candidate.confidence for candidate in candidates],
+        suggestion=build_review_suggestion(),
+    )
     repository.save_review(review)
     repository.save_review_image(review.id, images[0])
     return RecognitionResult(status="review_required", review_id=review.id, reason=reason)
@@ -3841,6 +4009,22 @@ def resolve_review(review_id: UUID, resolution: ReviewResolution, authorization:
     updated = review.model_copy(update={"status": "resolved", "resolved_person_id": resolution.person_id})
     repository.save_review(updated)
     repository.delete_review_evidence(review_id)
+    return updated
+
+
+@app.post("/v1/reviews/{review_id}/suggestion/dismiss", response_model=ReviewItem)
+def dismiss_review_suggestion(review_id: UUID, authorization: Optional[str] = Header(default=None)) -> ReviewItem:
+    """Descarta la hipotesis sugerida sin tocar la revision (KAN-67); nunca confirma identidad."""
+    require_auth(authorization)
+    review = repository.reviews.get(review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found")
+    if review.suggestion is None:
+        return review
+    updated = review.model_copy(
+        update={"suggestion": review.suggestion.model_copy(update={"dismissed": True})}
+    )
+    repository.save_review(updated)
     return updated
 
 

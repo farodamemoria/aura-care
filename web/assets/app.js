@@ -719,7 +719,35 @@ async function renderReviews(reviews, people) {
     try { const response = await fetch(`/v1/reviews/${review.id}/image`, {headers: authHeaders}); if (!response.ok) throw new Error(); const url = URL.createObjectURL(await response.blob()); image.src = url; image.onload = () => URL.revokeObjectURL(url); }
     catch { image.alt = 'La captura ya ha caducado'; image.removeAttribute('src'); }
     const label = document.createElement('label'); label.textContent = `Captura del ${new Date(review.created_at).toLocaleString()}`;
+    const suggestion = review.suggestion && !review.suggestion.dismissed ? review.suggestion : null;
+    if (suggestion) {
+      const hint = document.createElement('div'); hint.className = 'review-suggestion';
+      const strength = suggestion.confidence === 'high' ? 'sugerencia fuerte' : 'pista';
+      const guessed = `Posiblemente es su ${suggestion.relationship}${suggestion.display_name ? `, ${suggestion.display_name}` : ''} (${strength}).`;
+      const text = document.createElement('p'); text.className = 'review-suggestion-text'; text.textContent = guessed;
+      hint.append(text);
+      if (suggestion.context) {
+        const context = document.createElement('p'); context.className = 'review-suggestion-context';
+        context.textContent = `Contexto: «${suggestion.context}»`;
+        hint.append(context);
+      }
+      const accept = document.createElement('button'); accept.className = 'primary'; accept.textContent = 'Confirmar sugerencia';
+      accept.onclick = async () => {
+        if (!suggestion.person_id) return toast('Elige abajo la persona correcta y confirma.', 'error');
+        accept.disabled = true;
+        try { await api(`/v1/reviews/${review.id}/resolve`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({person_id: suggestion.person_id})}); toast('Gracias. Faro ya reconocerá a esa persona.', 'success'); await load(); }
+        catch (error) { notify(error); } finally { accept.disabled = false; }
+      };
+      const reject = document.createElement('button'); reject.className = 'secondary'; reject.textContent = 'Descartar sugerencia';
+      reject.onclick = async () => {
+        try { await api(`/v1/reviews/${review.id}/suggestion/dismiss`, {method: 'POST'}); toast('Sugerencia descartada.', 'success'); await load(); }
+        catch (error) { notify(error); }
+      };
+      hint.append(accept, reject);
+      controls.append(hint);
+    }
     select.append(new Option('Selecciona una persona…', ''), ...people.map(person => new Option(`${person.display_name} · ${person.relationship}`, person.id)));
+    if (suggestion && suggestion.person_id) select.value = suggestion.person_id;
     button.className = 'primary'; button.textContent = 'Confirmar';
     button.onclick = async () => {
       if (!select.value) return toast('Elige una persona o usa «Descartar».', 'error');
