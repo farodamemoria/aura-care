@@ -909,6 +909,25 @@ class LiveViewRequest(BaseModel):
     updated_at: datetime
 
 
+class HelpProtocolContact(BaseModel):
+    display_name: str
+    role: str
+    phone_e164: str
+    alternate_phone_e164: Optional[str] = None
+    spelled_name: str = ""
+
+
+class HelpProtocol(BaseModel):
+    patient_name: str = ""
+    location_label: str = ""
+    phrase_gl: str = ""
+    phrase_es: str = ""
+    contact: Optional[HelpProtocolContact] = None
+    alternate: Optional[HelpProtocolContact] = None
+    guidance: str = ""
+    updated_at: datetime
+
+
 class FaceProvider(Protocol):
     def enroll(self, person_id: UUID, images: list[bytes]) -> int: ...
     def search(self, image: bytes) -> list[FaceCandidate]: ...
@@ -4038,6 +4057,57 @@ def update_live_view_status(view_id: UUID, request: LiveViewStatusUpdate, author
         metadata={"action": "live_view_status", "source": view.source, "status": request.status},
     ))
     return updated
+
+
+def _help_protocol_contact(contact: CareContact) -> HelpProtocolContact:
+    return HelpProtocolContact(
+        display_name=contact.display_name,
+        role=contact.role,
+        phone_e164=contact.phone_e164,
+        alternate_phone_e164=contact.alternate_phone_e164,
+        spelled_name=", ".join(list(contact.display_name.upper())),
+    )
+
+
+@app.get("/v1/help-protocol", response_model=HelpProtocol)
+def help_protocol(authorization: Optional[str] = Header(default=None)) -> HelpProtocol:
+    """KAN-73: datos minimos y frases para que el paciente pida ayuda a un tercero."""
+    require_auth(authorization)
+    profile = repository.get_patient_profile()
+    patient_name = profile.preferred_name if profile else ""
+    location_label = profile.home_address.label() if profile else ""
+    contacts = [contact for contact in repository.care_contacts.values() if contact.alerts_enabled]
+    contacts.sort(key=lambda item: item.priority)
+    primary = contacts[0] if contacts else None
+    alternate = contacts[1] if len(contacts) > 1 else None
+    if primary is None:
+        return HelpProtocol(
+            patient_name=patient_name,
+            location_label=location_label,
+            guidance="Todavía no hay un familiar o cuidador de referencia en la red de cuidados.",
+            updated_at=now(),
+        )
+    where_gl = location_label or "a dirección da miña ficha"
+    where_es = location_label or "la dirección de mi ficha"
+    return HelpProtocol(
+        patient_name=patient_name,
+        location_label=location_label,
+        phrase_gl=(
+            f"Ola, teño problemas de memoria e necesito axuda. Podes chamar a "
+            f"{primary.display_name} ({primary.role}) ao {primary.phone_e164}? Estou en {where_gl}."
+        ),
+        phrase_es=(
+            f"Hola, tengo problemas de memoria y necesito ayuda. ¿Puedes llamar a "
+            f"{primary.display_name} ({primary.role}) al {primary.phone_e164}? Estoy en {where_es}."
+        ),
+        contact=_help_protocol_contact(primary),
+        alternate=(_help_protocol_contact(alternate) if alternate else None),
+        guidance=(
+            "Repite la frase con calma. Si no entienden el nombre, deletréalo letra a letra "
+            "usando 'nombre deletreado'."
+        ),
+        updated_at=now(),
+    )
 
 
 @app.get("/v1/devices", response_model=DeviceInventory)
