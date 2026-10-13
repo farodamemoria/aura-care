@@ -84,13 +84,14 @@ function icon(name, size = 16) {
 }
 
 async function load() {
-  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos'];
+  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos', 'transmisiones'];
   const requests = [
     api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
     api('/v1/events?limit=500'), api('/v1/location-sessions/active'),
     api('/v1/cognitive-exercises'), api('/v1/cognitive-exercises/summary'), api('/v1/calendar-events'),
     api('/v1/stats/evolution?days=30'),
     api('/v1/devices'),
+    api('/v1/live-views'),
   ];
   const settled = await Promise.allSettled(requests);
   const failed = [];
@@ -111,6 +112,7 @@ async function load() {
   const agenda = pick(8) || [];
   const stats = pick(9);
   const devices = pick(10);
+  const liveViews = pick(11) || [];
 
   const pending = reviews.filter(review => review.status === 'pending');
   document.querySelector('#people-count').textContent = people.length;
@@ -131,7 +133,7 @@ async function load() {
 
   if (patient) { fillPatient(patient); await renderPatientPhoto(patient); }
   renderCareContacts(contacts, people);
-  renderDevices(devices);
+  renderDevices(devices, liveViews);
   populateKnownPersonOptions(people);
   renderPeople(people);
   await renderReviews(pending, people);
@@ -714,7 +716,7 @@ function renderPeople(people) {
   if (!people.length) target.append(empty('Aún no hay personas conocidas. Añade la primera para comenzar.'));
 }
 
-function renderDevices(inventory) {
+function renderDevices(inventory, liveViews) {
   const target = document.querySelector('#devices');
   if (!target) return;
   target.replaceChildren();
@@ -741,14 +743,67 @@ function renderDevices(inventory) {
     card.append(title, meta);
     target.append(card);
   });
+
   const consent = document.createElement('article'); consent.className = 'device-card';
   const consentTitle = document.createElement('strong'); consentTitle.textContent = 'Vídeo en directo';
   const consentText = document.createElement('p');
   consentText.textContent = inventory.video_consent
-    ? 'Consentimiento activo: la transmisión llegará en la fase 2.'
-    : 'Pendiente de consentimiento (fase 2 de KAN-75).';
-  consent.append(consentTitle, consentText);
+    ? 'Consentimiento activo: se pueden solicitar transmisiones.'
+    : 'Sin consentimiento: actívalo para solicitar transmisiones.';
+  const consentButton = document.createElement('button');
+  consentButton.className = inventory.video_consent ? 'secondary' : 'primary';
+  consentButton.textContent = inventory.video_consent ? 'Retirar consentimiento' : 'Activar consentimiento';
+  consentButton.onclick = async () => {
+    consentButton.disabled = true;
+    try {
+      await api('/v1/devices/video-consent', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({granted: !inventory.video_consent, notes: ''})});
+      toast('Consentimiento actualizado.', 'success');
+      await load();
+    } catch (error) { notify(error); } finally { consentButton.disabled = false; }
+  };
+  consent.append(consentTitle, consentText, consentButton);
   target.append(consent);
+
+  ['glasses', 'phone'].forEach(kind => {
+    const card = document.createElement('article'); card.className = 'device-card';
+    const title = document.createElement('strong'); title.textContent = `Transmisión · ${labels[kind] || kind}`;
+    const hint = document.createElement('p');
+    hint.textContent = inventory.video_consent ? 'Solicita una vista en directo cuando lo necesites.' : 'Requiere consentimiento de vídeo.';
+    const button = document.createElement('button'); button.className = 'primary'; button.textContent = 'Solicitar transmisión';
+    button.disabled = !inventory.video_consent;
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await api('/v1/live-views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({source: kind, reason: 'Petición desde Faro Familia'})});
+        toast('Solicitud registrada y auditada. El vídeo en directo llegará en la fase 3.', 'success');
+        await load();
+      } catch (error) { notify(error); } finally { button.disabled = false; }
+    };
+    card.append(title, hint, button);
+    target.append(card);
+  });
+
+  (liveViews || []).forEach(view => {
+    const card = document.createElement('article'); card.className = 'device-card';
+    const title = document.createElement('strong'); title.textContent = `Solicitud · ${labels[view.source] || view.source}`;
+    const meta = document.createElement('p');
+    meta.textContent = `${view.status} · ${new Date(view.created_at).toLocaleString()}`;
+    card.append(title, meta);
+    if (view.status === 'pending' || view.status === 'active') {
+      const cancel = document.createElement('button'); cancel.className = 'secondary'; cancel.textContent = 'Cancelar';
+      cancel.onclick = async () => {
+        cancel.disabled = true;
+        try {
+          await api(`/v1/live-views/${view.id}/status`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status: 'cancelled'})});
+          toast('Solicitud cancelada.', 'success');
+          await load();
+        } catch (error) { notify(error); } finally { cancel.disabled = false; }
+      };
+      card.append(cancel);
+    }
+    target.append(card);
+  });
+
   if (!target.children.length) target.append(empty('Todavía no hay dispositivos autorizados.'));
 }
 

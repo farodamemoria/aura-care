@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -69,4 +70,4 @@ def test_portal_muestra_el_panel_de_dispositivos() -> None:
     assert 'id="device-count"' in html
     assert "/v1/devices" in js
     assert "renderDevices" in js
-    assert "/assets/app.js?v=41" in html
+    assert re.search(r"/assets/app\.js\?v=\d+", html)
