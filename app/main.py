@@ -2365,6 +2365,7 @@ def answer_location_question(
             message="Estoy actualizando tu ubicación para poder decírtelo con seguridad.",
             accuracy_meters=request.accuracy_meters,
         )
+    remember_device_location(request.latitude, request.longitude, request.accuracy_meters, request.recorded_at)
     profile = repository.get_patient_profile()
     home = profile.home_address if profile else None
     if home and home.latitude is not None and home.longitude is not None:
@@ -2472,6 +2473,25 @@ def get_onboarding(authorization: Optional[str] = Header(default=None)) -> Optio
     return repository.get_onboarding()
 
 
+_LAST_DEVICE_LOCATION: dict = {}
+
+
+def remember_device_location(latitude: float, longitude: float, accuracy_meters: float,
+                             recorded_at: Optional[datetime] = None) -> None:
+    """KAN-147: guarda la ultima ubicacion valida del dispositivo para enriquecer avisos."""
+    _LAST_DEVICE_LOCATION.update({
+        "latitude": latitude, "longitude": longitude, "accuracy_meters": accuracy_meters,
+        "recorded_at": recorded_at or now(), "stored_at": now(),
+    })
+
+
+def recent_device_location(max_age: timedelta = timedelta(minutes=10)) -> Optional[dict]:
+    stored = _LAST_DEVICE_LOCATION.get("stored_at")
+    if stored is None or now() - stored > max_age:
+        return None
+    return dict(_LAST_DEVICE_LOCATION)
+
+
 @app.post("/v1/emergency-alerts", response_model=EmergencyAlert, status_code=201)
 def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Optional[str] = Header(default=None)) -> EmergencyAlert:
     actor = require_auth(authorization)
@@ -2488,6 +2508,14 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
     alert_request = EmergencyAlertCreate.model_validate(request.model_dump(exclude={
         "evidence_image_base64", "evidence_mime_type", "evidence_captured_at",
     }))
+    if alert_request.latitude is None:
+        recent = recent_device_location()
+        if recent is not None:
+            alert_request = alert_request.model_copy(update={
+                "latitude": recent["latitude"], "longitude": recent["longitude"],
+                "location_accuracy_meters": recent["accuracy_meters"],
+                "location_source": "gps", "location_recorded_at": recent["recorded_at"],
+            })
     image, photo_status = decode_recent_evidence_fields(
         request.evidence_image_base64, request.evidence_mime_type, request.evidence_captured_at,
     )
