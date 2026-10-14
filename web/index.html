@@ -241,6 +241,8 @@
       <div id="stats-categories" class="stats-categories"></div>
       <h3 class="stats-subtitle">Detalle por día</h3>
       <div id="stats-list" class="stats-list"></div>
+      <h3 class="stats-subtitle">Panel longitudinal (profesional)</h3>
+      <div id="longitudinal" class="stats-list"></div>
     </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" loading="lazy" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir fotos</span><input type="file" name="files" accept="image/jpeg,image/png,image/heic" multiple required></label><div class="file-hint">De 1 a 5 fotos. Frontal, con buena luz y sin otras personas (3–5 mejoran la precisión).</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
@@ -255,6 +257,6 @@
       </div>
     </div>
   </dialog>
-  <script src="/assets/app.js?v=43" defer></script>
+  <script src="/assets/app.js?v=44" defer></script>
 </body>
 </html>

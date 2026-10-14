@@ -928,6 +928,30 @@ class HelpProtocol(BaseModel):
     updated_at: datetime
 
 
+class LongitudinalSeriesPoint(BaseModel):
+    date: date
+    help_requests: int = 0
+    hazards: int = 0
+    disorientation: int = 0
+    location_incidents: int = 0
+    escalations: int = 0
+    impacts: int = 0
+    urgent: int = 0
+
+
+class LongitudinalPanel(BaseModel):
+    period_days: int
+    since: datetime
+    until: datetime
+    totals: dict[str, int]
+    previous_totals: dict[str, int]
+    delta_percent: dict[str, float]
+    by_day: list[LongitudinalSeriesPoint]
+    by_hour: list[int]
+    severity: dict[str, int]
+    notes: str
+
+
 class FaceProvider(Protocol):
     def enroll(self, person_id: UUID, images: list[bytes]) -> int: ...
     def search(self, image: bytes) -> list[FaceCandidate]: ...
@@ -4788,6 +4812,93 @@ def stats_evolution(days: int = 30, authorization: Optional[str] = Header(defaul
     """Evolución diaria del paciente: ejercicios cognitivos + alertas, en modo gráfico/cronológico."""
     require_auth(authorization)
     return compute_stats(days)
+
+
+LONGITUDINAL_NOTES = (
+    "Clasificación: help_requests=peticiones de ayuda; hazards=avisos preventivos; "
+    "impacts=caídas o golpes; disorientation=pérdidas u orientación; "
+    "location_incidents=incidentes de ubicación; escalations=acciones de la red de cuidados; "
+    "urgent=eventos de gravedad urgente."
+)
+
+
+def _longitudinal_bucket() -> dict[str, int]:
+    return {
+        "help_requests": 0, "hazards": 0, "disorientation": 0, "location_incidents": 0,
+        "escalations": 0, "impacts": 0, "urgent": 0,
+    }
+
+
+def _longitudinal_classify(event) -> Optional[str]:
+    if event.kind == "help_request":
+        return "help_requests"
+    if event.kind == "hazard":
+        summary = (event.summary or "").lower()
+        if any(marker in summary for marker in ("caída", "caida", "golpe", "impacto", "desmayo")):
+            return "impacts"
+        return "hazards"
+    if event.kind == "episode":
+        return "disorientation"
+    if event.kind == "location":
+        return "location_incidents"
+    if event.kind == "caregiver_action":
+        return "escalations"
+    return None
+
+
+def compute_longitudinal(days: int = 30) -> LongitudinalPanel:
+    """KAN-37: evolución longitudinal por día y hora para cuidadores y personal autorizado."""
+    if days < 7 or days > 180:
+        days = 30
+    zone = family_zone()
+    end = now().astimezone(zone)
+    since = end - timedelta(days=days)
+    previous_since = since - timedelta(days=days)
+    totals = _longitudinal_bucket()
+    previous = _longitudinal_bucket()
+    severity = {"info": 0, "attention": 0, "urgent": 0}
+    by_day_map: dict[date, dict[str, int]] = {}
+    by_hour = [0] * 24
+    for event in repository.list_events(500, None):
+        moment = event.occurred_at.astimezone(zone)
+        if moment < previous_since:
+            continue
+        category = _longitudinal_classify(event)
+        if moment < since:
+            if category:
+                previous[category] += 1
+            continue
+        if category:
+            totals[category] += 1
+        severity[event.severity] = severity.get(event.severity, 0) + 1
+        day_row = by_day_map.setdefault(moment.date(), _longitudinal_bucket())
+        if category:
+            day_row[category] += 1
+        if event.severity == "urgent":
+            totals["urgent"] += 1
+            day_row["urgent"] += 1
+        by_hour[moment.hour] += 1
+    delta_percent = {}
+    for key, value in totals.items():
+        base = previous.get(key, 0)
+        delta_percent[key] = round((value - base) / base * 100, 1) if base else (100.0 if value else 0.0)
+    by_day = []
+    for offset in range(days, 0, -1):
+        day = (end - timedelta(days=offset)).date()
+        row = by_day_map.get(day, _longitudinal_bucket())
+        by_day.append(LongitudinalSeriesPoint(date=day, **row))
+    return LongitudinalPanel(
+        period_days=days, since=since, until=end, totals=totals, previous_totals=previous,
+        delta_percent=delta_percent, by_day=by_day, by_hour=by_hour, severity=severity,
+        notes=LONGITUDINAL_NOTES,
+    )
+
+
+@app.get("/v1/stats/longitudinal", response_model=LongitudinalPanel)
+def stats_longitudinal(days: int = 30, authorization: Optional[str] = Header(default=None)) -> LongitudinalPanel:
+    """KAN-37: panel longitudinal de crisis, riesgos y evolución del paciente."""
+    require_auth(authorization)
+    return compute_longitudinal(days)
 
 
 def compute_stats(days: int = 30) -> StatsEvolution:
