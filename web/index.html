@@ -50,9 +50,6 @@
       <article><strong id="contact-count">0</strong><span>contactos preparados</span></article>
       <article><strong id="device-count">0</strong><span>dispositivos autorizados</span></article>
     </section>
-    <section class="reveal devices-panel" aria-label="Dispositivos">
-      <div id="devices" class="device-list"></div>
-    </section>
     <nav class="tabs" aria-label="Secciones" role="tablist">
       <button id="tab-patient" class="tab active" role="tab" aria-selected="true" aria-controls="patient-view" data-view="patient-view">Paciente</button>
       <button id="tab-people" class="tab" role="tab" aria-selected="false" aria-controls="people-view" data-view="people-view">Personas conocidas</button>
@@ -62,6 +59,7 @@
       <button id="tab-exercises" class="tab" role="tab" aria-selected="false" aria-controls="exercises-view" data-view="exercises-view">Ejercicios <span id="exercises-badge" class="badge" hidden></span></button>
       <button id="tab-agenda" class="tab" role="tab" aria-selected="false" aria-controls="agenda-view" data-view="agenda-view">Agenda <span id="agenda-badge" class="badge" hidden></span></button>
       <button id="tab-stats" class="tab" role="tab" aria-selected="false" aria-controls="stats-view" data-view="stats-view">Estadísticas</button>
+      <button id="tab-devices" class="tab" role="tab" aria-selected="false" aria-controls="devices-view" data-view="devices-view">Dispositivos</button>
     </nav>
     <section id="patient-view" class="view active" role="tabpanel" aria-labelledby="tab-patient" tabindex="-1">
       <div class="section-heading"><div><span class="kicker">Quien usa las gafas</span><h2>Ficha del paciente</h2><p>Información propia de la persona a la que acompaña Faro. No se mezcla con familiares, cuidadores ni personas reconocidas.</p></div></div>
@@ -243,6 +241,10 @@
       <div id="stats-list" class="stats-list"></div>
       <h3 class="stats-subtitle">Panel longitudinal (profesional)</h3>
       <div id="longitudinal" class="stats-list"></div>
+    </section>
+    <section id="devices-view" class="view" role="tabpanel" aria-labelledby="tab-devices" tabindex="-1">
+      <div class="section-heading"><div><span class="kicker">Estado del sistema</span><h2>Dispositivos y servicios</h2><p>Inventario autorizado y actividad reciente de las gafas, el móvil, el portal y el servicio. Aquí se gestiona el consentimiento de vídeo y las solicitudes de transmisión (KAN-75).</p></div></div>
+      <div id="devices" class="device-list"></div>
     </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" loading="lazy" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir fotos</span><input type="file" name="files" accept="image/jpeg,image/png,image/heic" multiple required></label><div class="file-hint">De 1 a 5 fotos. Frontal, con buena luz y sin otras personas (3–5 mejoran la precisión).</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
