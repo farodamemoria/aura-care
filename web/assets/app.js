@@ -84,7 +84,7 @@ function icon(name, size = 16) {
 }
 
 async function load() {
-  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos', 'transmisiones'];
+  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos', 'transmisiones', 'panel longitudinal'];
   const requests = [
     api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
     api('/v1/events?limit=500'), api('/v1/location-sessions/active'),
@@ -92,6 +92,7 @@ async function load() {
     api('/v1/stats/evolution?days=30'),
     api('/v1/devices'),
     api('/v1/live-views'),
+    api('/v1/stats/longitudinal?days=30'),
   ];
   const settled = await Promise.allSettled(requests);
   const failed = [];
@@ -113,6 +114,7 @@ async function load() {
   const stats = pick(9);
   const devices = pick(10);
   const liveViews = pick(11) || [];
+  const longitudinal = pick(12);
 
   const pending = reviews.filter(review => review.status === 'pending');
   document.querySelector('#people-count').textContent = people.length;
@@ -142,6 +144,7 @@ async function load() {
   if (exerciseSummary) renderExercises(exercises, exerciseSummary);
   renderAgenda(agenda);
   renderStats(stats);
+  renderLongitudinal(longitudinal);
 
   if (failed.length) toast(`No se pudo cargar: ${failed.join(', ')}.`, 'error');
 }
@@ -408,6 +411,40 @@ function renderExercises(exercises, summary) {
     target.append(article);
   }
   if (!target.children.length) target.append(empty('Todavía no hay ejercicios. Programa uno con el formulario de arriba.'));
+}
+
+function renderLongitudinal(panel) {
+  const target = document.querySelector('#longitudinal');
+  if (!target) return;
+  target.replaceChildren();
+  if (!panel) { target.append(empty('Sin datos del panel longitudinal todavía.')); return; }
+  const labelMap = {
+    help_requests: 'Peticiones de ayuda', hazards: 'Avisos preventivos', impacts: 'Caídas o golpes',
+    disorientation: 'Desorientación', location_incidents: 'Ubicación', escalations: 'Escalados a la red', urgent: 'Urgentes',
+  };
+  const grid = document.createElement('div'); grid.className = 'device-list';
+  Object.keys(labelMap).forEach(key => {
+    const card = document.createElement('article'); card.className = 'device-card';
+    const title = document.createElement('strong'); title.textContent = labelMap[key];
+    const value = document.createElement('p');
+    const delta = (panel.delta_percent || {})[key] || 0;
+    const arrow = delta > 0 ? '▲' : delta < 0 ? '▼' : '=';
+    value.textContent = `${(panel.totals || {})[key] || 0} (antes: ${(panel.previous_totals || {})[key] || 0} · ${arrow} ${Math.abs(delta)}%)`;
+    card.append(title, value); grid.append(card);
+  });
+  target.append(grid);
+  const hours = document.createElement('p'); hours.className = 'status-line';
+  const withHours = (panel.by_hour || []).map((count, hour) => `${String(hour).padStart(2, '0')}h:${count}`).filter((_, hour) => (panel.by_hour || [])[hour] > 0);
+  hours.textContent = 'Distribución por hora: ' + (withHours.length ? withHours.join('  ') : 'sin eventos en el periodo');
+  target.append(hours);
+  const days = document.createElement('p'); days.className = 'status-line';
+  const activeDays = (panel.by_day || []).filter(day => Object.keys(labelMap).some(key => (day[key] || 0) > 0));
+  days.textContent = activeDays.length
+    ? 'Días con actividad: ' + activeDays.slice(-10).map(day => `${day.date}→${Object.keys(labelMap).reduce((sum, key) => sum + (day[key] || 0), 0)}`).join(' · ')
+    : 'Sin días con actividad en el periodo.';
+  target.append(days);
+  const note = document.createElement('p'); note.className = 'device-card'; note.textContent = panel.notes || '';
+  target.append(note);
 }
 
 function renderStats(stats) {
