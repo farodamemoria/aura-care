@@ -2286,10 +2286,31 @@ def delete_care_contact(contact_id: UUID, authorization: Optional[str] = Header(
     return Response(status_code=204)
 
 
+def reconcile_patient_media(profile: CaredPersonProfile) -> CaredPersonProfile:
+    """KAN-139: si se perdieron los ficheros, ajusta los contadores para no servir 404s."""
+    available = sum(
+        1 for index in range(1, 6)
+        if repository.person_photo_sample(PATIENT_FACE_ID, index) is not None
+    )
+    photo_available = repository.person_photo(PATIENT_FACE_ID) is not None
+    if available == profile.face_enrollment_samples and photo_available == profile.profile_photo_available:
+        return profile
+    updated = profile.model_copy(update={
+        "face_enrollment_samples": available,
+        "face_enrollment_complete": available >= 5,
+        "profile_photo_available": photo_available,
+    })
+    repository.save_patient_profile(updated)
+    return updated
+
+
 @app.get("/v1/patient-profile", response_model=Optional[CaredPersonProfile])
 def get_patient_profile(authorization: Optional[str] = Header(default=None)) -> Optional[CaredPersonProfile]:
     require_auth(authorization)
-    return repository.get_patient_profile()
+    profile = repository.get_patient_profile()
+    if profile is None:
+        return None
+    return reconcile_patient_media(profile)
 
 
 @app.put("/v1/patient-profile", response_model=CaredPersonProfile)
