@@ -3995,6 +3995,56 @@ def ask_family_question(
     )
 
 
+class FamilySpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=600)
+    language: Optional[str] = None
+
+
+_family_speech_cache: dict[str, bytes] = {}
+
+
+def elevenlabs_speech(text: str) -> Optional[bytes]:
+    """Voz de Faro via ElevenLabs (Flash v2.5). None si no hay clave configurada."""
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        return None
+    voice = os.getenv("ELEVENLABS_VOICE_ID", "QtPMrakdgePQIUwOX7Ut").strip()
+    model = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5").strip()
+    payload = json.dumps({"text": text, "model_id": model}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_22050_32",
+        data=payload,
+        method="POST",
+        headers={"xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+@app.post("/v1/family/speech")
+def family_speech(
+    request: FamilySpeechRequest, authorization: Optional[str] = Header(default=None),
+) -> Response:
+    """Lee en voz alta (voz de Faro) una respuesta del chat familiar."""
+    require_auth(authorization)
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Text is empty")
+    cached = _family_speech_cache.get(text)
+    if cached is None:
+        try:
+            cached = elevenlabs_speech(text)
+        except Exception as error:  # red, cuota… el cliente cae a su voz local
+            logging.warning("ElevenLabs family speech failed: %s", error)
+            cached = None
+        if cached is None:
+            raise HTTPException(status_code=502, detail="Speech synthesis unavailable")
+        if len(_family_speech_cache) > 64:
+            _family_speech_cache.clear()
+        _family_speech_cache[text] = cached
+    return Response(content=cached, media_type="audio/mpeg")
+
+
 @app.post("/v1/pairing-invites", response_model=PairingInvite, status_code=201)
 def create_pairing_invite(request: PairingInviteCreate, authorization: Optional[str] = Header(default=None)) -> PairingInvite:
     actor = require_auth(authorization)

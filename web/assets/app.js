@@ -1094,7 +1094,14 @@ let stopListening = null;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const speechLanguages = {es: 'es-ES', gl: 'gl-ES', en: 'en-US'};
 
-function speakAnswer(text, language) {
+let currentAudio = null;
+
+function stopSpeaking() {
+  if (currentAudio) { try { currentAudio.pause(); } catch {} currentAudio = null; }
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+}
+
+function speakWithBrowser(text, language) {
   return new Promise(resolve => {
     if (!('speechSynthesis' in window) || !text) return resolve();
     const utterance = new SpeechSynthesisUtterance(text);
@@ -1104,6 +1111,26 @@ function speakAnswer(text, language) {
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   });
+}
+
+async function speakAnswer(text, language) {
+  if (!text) return;
+  stopSpeaking();
+  try {
+    const response = await fetch('/v1/family/speech', {method: 'POST', headers: {...authHeaders, 'Content-Type': 'application/json'}, body: JSON.stringify({text, language})});
+    if (!response.ok) throw new Error(`speech ${response.status}`);
+    const blob = await response.blob();
+    const audio = new Audio(URL.createObjectURL(blob));
+    currentAudio = audio;
+    await new Promise((resolve, reject) => {
+      audio.onended = () => resolve();
+      audio.onerror = () => reject(new Error('No se pudo reproducir el audio.'));
+      audio.play().catch(reject);
+    });
+    if (currentAudio === audio) currentAudio = null;
+  } catch (error) {
+    return speakWithBrowser(text, language);
+  }
 }
 
 async function askFaro(question) {
@@ -1155,7 +1182,7 @@ if (SpeechRecognition && talkMic) {
   startListening = async () => {
     const granted = await requestMicrophone();
     if (!granted) { conversationMode = false; setListening(false); return notify(new Error(microphoneMessage)); }
-    try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); recognition.start(); setListening(true); }
+    try { stopSpeaking(); recognition.start(); setListening(true); }
     catch (error) { setListening(false); }
   };
   stopListening = () => { setListening(false); try { recognition.stop(); } catch (error) {} };
@@ -1182,6 +1209,7 @@ if (SpeechRecognition && talkMic) {
 
 if (talkReset) {
   talkReset.addEventListener('click', () => {
+    stopSpeaking();
     localStorage.removeItem('familyConversationId');
     talkAnswer.hidden = true; talkAnswer.textContent = '';
     talkInput.value = '';
