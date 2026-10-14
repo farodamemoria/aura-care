@@ -2342,12 +2342,23 @@ def distance_meters(latitude_a: float, longitude_a: float, latitude_b: float, lo
     return radius * 2 * math.atan2(math.sqrt(haversine), math.sqrt(1 - haversine))
 
 
+def require_auth_or_device(authorization: Optional[str]) -> str:
+    """Acepta el token local (bridge/portal) o una credencial de dispositivo valida (apps)."""
+    try:
+        return require_auth(authorization)
+    except HTTPException as error:
+        if error.status_code not in (401, 503):
+            raise
+    status = validate_device_credential(authorization)
+    return status.care_circle_id
+
+
 @app.post("/v1/location/answer", response_model=LocationAnswer)
 def answer_location_question(
     request: LocationQuestion,
     authorization: Optional[str] = Header(default=None),
 ) -> LocationAnswer:
-    require_auth(authorization)
+    require_auth_or_device(authorization)
     if request.recorded_at and now() - request.recorded_at > timedelta(minutes=5):
         return LocationAnswer(
             status="refresh_required",
