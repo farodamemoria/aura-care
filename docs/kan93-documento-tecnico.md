@@ -71,7 +71,8 @@ El portal y las apps hablan **solo con AURA Care**; AURA Care habla con los prov
 - La app envía fotogramas a `POST /v1/recognitions`; el backend decide con criterio conservador:
   confianza mínima **95 %**, media mínima **97 %**, **2 fotogramas** coincidentes, enfriamiento de
 10 minutos y revisión de imágenes con TTL de 24 horas. Si duda, no pronuncia el nombre y lo manda
-a «Personas por aclarar» (`GET /v1/reviews`, `POST /v1/reviews/{review_id}/resolve`). Las
+a «Personas por aclarar» (`GET /v1/reviews`, `POST /v1/reviews/{review_id}/resolve`;
+`POST /v1/reviews/{review_id}/suggestion/dismiss` descarta la identidad sugerida, KAN-67). Las
 revisiones y su evidencia **persisten entre reinicios** (SQLite + `review-images/` cifrada con
 `AURA_REVIEW_SECRET`) y se **borran de forma segura** al resolverlas o al caducar (KAN-78).
 
@@ -80,6 +81,8 @@ revisiones y su evidencia **persisten entre reinicios** (SQLite + `review-images
 - `POST /v1/family/ask` construye la respuesta con los eventos del día y la **memoria
   conversacional** (`family_messages` + `conversation_id`). Si el familiar se despide, devuelve
   `end_conversation=true`.
+- `POST /v1/family/speech` sintetiza en el servidor la voz de Faro (**ElevenLabs**, KAN-140/KAN-142)
+  para leer en voz alta las respuestas del chat; si falla, el portal cae a la voz del navegador.
 - La IA puede activar avisos con la herramienta `registrar_aviso`, que guarda reglas en
   `family_alert_rules` (palabras clave: dolor, caída/golpe, respiración; más reglas propias del
   familiar).
@@ -136,11 +139,15 @@ portal incluye la pestaña **Ejercicios** para verlos y marcarlos.
 Además, se pueden **programar** ejercicios con texto libre y hora (`POST /v1/cognitive-exercises/scheduled`);
 `POST /v1/cognitive-exercises/tick` (y el planificador) los pregunta por voz al paciente a su hora, y
 `GET /v1/cognitive-exercises/report?period=daily|weekly|monthly` devuelve el informe del periodo.
+`POST /v1/cognitive-exercises/auto-daily` (KAN-131) fuerza la creación diaria **idempotente** de los
+ejercicios genéricos proactivos (orientación, recuerdo, nombrado y movimiento).
 
 La pestaña **Estadísticas** usa `GET /v1/stats/evolution?days=30`: evolución diaria (ejercicios
 completados, % de aciertos, alertas y urgentes) en modo gráfico y cronológico, con una tendencia
 general (mejora / estable / deterioro). `GET /v1/stats/insights?days=30` genera (con IA, o resumen
-automático) una valoración del estado del paciente y una recomendación para la familia.
+automático) una valoración del estado del paciente y una recomendación para la familia. El **panel
+longitudinal** (`GET /v1/stats/longitudinal?days=30`, KAN-37) resume crisis, riesgos y evolución del
+paciente en una vista temporal.
 
 ### 2.8 Agenda y recordatorios
 
@@ -161,7 +168,8 @@ Portal y estáticos:
 - `GET /track/{share_token}` — página pública de seguimiento de una ubicación compartida.
 - `GET /.well-known/assetlinks.json` — enlace de la TWA de Faro Familia.
 - `GET /download/faro.apk`, `GET /download/camera-access.apk`,
-  `GET /download/faro-movil.apk`, `GET /download/faro-familia.apk` — descargas de las apps.
+  `GET /download/faro-movil.apk`, `GET /download/faro-familia.apk`,
+  `GET /download/faro-puente.apk` — descargas de las apps.
 
 Salud y versión:
 
@@ -190,7 +198,8 @@ Personas conocidas:
 Reconocimiento y revisiones:
 
 - `POST /v1/recognitions`, `GET /v1/reviews`,
-  `GET /v1/reviews/{review_id}/image`, `POST /v1/reviews/{review_id}/resolve`.
+  `GET /v1/reviews/{review_id}/image`, `POST /v1/reviews/{review_id}/resolve`,
+  `POST /v1/reviews/{review_id}/suggestion/dismiss`.
 
 Red de cuidados:
 
@@ -235,7 +244,8 @@ Zonas seguras:
 Ejercicios cognitivos:
 
 - `POST /v1/cognitive-exercises`, `GET /v1/cognitive-exercises`,
-  `GET /v1/cognitive-exercises/summary`, `POST /v1/cognitive-exercises/{exercise_id}/answer`.
+  `GET /v1/cognitive-exercises/summary`, `POST /v1/cognitive-exercises/{exercise_id}/answer`,
+  `POST /v1/cognitive-exercises/auto-daily`.
 
 Agenda:
 
@@ -245,12 +255,21 @@ Agenda:
 
 Conversación familiar:
 
-- `POST /v1/family/ask`.
+- `POST /v1/family/ask`, `POST /v1/family/speech`.
 
 Emparejamiento y dispositivos:
 
 - `POST /v1/pairing-invites`, `POST /v1/pairing/claim`,
-  `POST /v1/device-credentials/validate`.
+  `POST /v1/device-credentials/validate`, `GET /v1/devices`,
+  `PUT /v1/devices/video-consent`.
+
+Vistas en directo (KAN-75):
+
+- `GET /v1/live-views`, `POST /v1/live-views`, `POST /v1/live-views/{view_id}/status`.
+
+Ayuda al familiar (KAN-73):
+
+- `GET /v1/help-protocol`.
 
 Escucha ambiental:
 
@@ -261,7 +280,7 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v47`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v55`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.
