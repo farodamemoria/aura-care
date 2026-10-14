@@ -17,6 +17,7 @@ import hmac
 import re
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 import sqlite3
 import math
@@ -2342,6 +2343,35 @@ def distance_meters(latitude_a: float, longitude_a: float, latitude_b: float, lo
     return radius * 2 * math.atan2(math.sqrt(haversine), math.sqrt(1 - haversine))
 
 
+_GEOCODE_CACHE: dict[tuple[int, int], tuple[datetime, str]] = {}
+
+
+def reverse_geocode(latitude: float, longitude: float) -> Optional[str]:
+    """KAN-149: direccion/entorno aproximado (tipo Maps) via Nominatim/OpenStreetMap, con cache."""
+    cache_key = (round(latitude, 3), round(longitude, 3))
+    cached = _GEOCODE_CACHE.get(cache_key)
+    if cached and now() - cached[0] < timedelta(minutes=15):
+        return cached[1]
+    params = urllib.parse.urlencode({
+        "format": "jsonv2", "lat": f"{latitude:.5f}", "lon": f"{longitude:.5f}",
+        "zoom": 16, "addressdetails": 1, "accept-language": "es",
+    })
+    request = urllib.request.Request(
+        f"https://nominatim.openstreetmap.org/reverse?{params}",
+        headers={"User-Agent": "FaroDaMemoria/1.0 (contacto farodamemoria@gmail.com)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            data = json.loads(response.read())
+    except Exception:
+        return None
+    display = str(data.get("display_name") or "").strip()
+    if not display:
+        return None
+    _GEOCODE_CACHE[cache_key] = (now(), display)
+    return display
+
+
 def require_auth_or_device(authorization: Optional[str]) -> str:
     """Acepta el token local (bridge/portal) o una credencial de dispositivo valida (apps)."""
     try:
@@ -2368,14 +2398,15 @@ def answer_location_question(
     remember_device_location(request.latitude, request.longitude, request.accuracy_meters, request.recorded_at)
     profile = repository.get_patient_profile()
     home = profile.home_address if profile else None
+    home_label = (home.label() if home and home.label() else "Casa")
     if home and home.latitude is not None and home.longitude is not None:
         distance = distance_meters(request.latitude, request.longitude, home.latitude, home.longitude)
         home_margin = max(35.0, min(request.accuracy_meters, 150.0))
         if distance <= home_margin:
             return LocationAnswer(
                 status="at_home",
-                message="Estás en casa.",
-                place_label=home.label() or "Casa",
+                message=f"Estás en casa, en {home_label}.",
+                place_label=home_label,
                 distance_meters=round(distance, 1),
                 accuracy_meters=request.accuracy_meters,
             )
@@ -2385,9 +2416,18 @@ def answer_location_question(
             message="La ubicación todavía es aproximada. Estoy intentando afinarla.",
             accuracy_meters=request.accuracy_meters,
         )
+    place = reverse_geocode(request.latitude, request.longitude)
+    if place:
+        message = f"Estás cerca de {place}."
+    else:
+        message = "No parece que estés en casa."
+    if home and home.latitude is not None and home.longitude is not None:
+        distance = distance_meters(request.latitude, request.longitude, home.latitude, home.longitude)
+        message += f" Estás a unos {int(round(distance))} metros de casa."
     return LocationAnswer(
         status="coordinates_available",
-        message="No parece que estés en casa. Puedo compartir tu ubicación con tu familiar o cuidador.",
+        message=message,
+        place_label=place,
         distance_meters=(round(distance, 1) if home and home.latitude is not None and home.longitude is not None else None),
         accuracy_meters=request.accuracy_meters,
     )
