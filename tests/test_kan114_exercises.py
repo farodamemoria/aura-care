@@ -26,6 +26,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     monkeypatch.setenv("AURA_DATA_FILE", str(tmp_path / "state.json"))
     monkeypatch.setenv("AURA_CREDENTIAL_PEPPER", "test-pepper")
     main.repository = main.InMemoryRepository()
+    monkeypatch.setattr(main, "ensure_daily_generic_exercises", lambda reference=None: 0)
     return TestClient(main.app)
 
 
