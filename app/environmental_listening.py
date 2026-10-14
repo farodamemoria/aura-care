@@ -87,7 +87,7 @@ class ListeningConfig:
     min_occurrences: int = 3
     min_confidence: float = 0.6
     cooldown: timedelta = timedelta(minutes=10)
-    response_timeout: timedelta = timedelta(seconds=30)
+    response_timeout: timedelta = timedelta(seconds=15)
     max_retries: int = 1
 
 
