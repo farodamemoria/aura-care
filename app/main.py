@@ -675,7 +675,7 @@ class EmergencyAlertCreate(BaseModel):
 
 
 class EmergencyAlertSubmission(EmergencyAlertCreate):
-    evidence_image_base64: Optional[str] = Field(default=None, max_length=7_000_000)
+    evidence_image_base64: Optional[str] = Field(default=None, max_length=20_000_000)
     evidence_mime_type: Optional[str] = Field(default=None, pattern="^image/jpeg$")
     evidence_captured_at: Optional[datetime] = None
 
@@ -815,7 +815,7 @@ class ProtectiveObservationCreate(BaseModel):
     description: str = Field(min_length=1, max_length=500)
     location_label: Optional[str] = Field(default=None, max_length=200)
     observed_at: Optional[datetime] = None
-    evidence_image_base64: Optional[str] = Field(default=None, max_length=7_000_000)
+    evidence_image_base64: Optional[str] = Field(default=None, max_length=20_000_000)
     evidence_mime_type: Optional[str] = Field(default=None, pattern="^image/jpeg$")
     evidence_captured_at: Optional[datetime] = None
 
