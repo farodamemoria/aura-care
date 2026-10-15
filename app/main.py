@@ -2795,6 +2795,48 @@ DAILY_GENERIC_QUESTIONS = (
 DAILY_GENERIC_COUNT = 3
 
 
+def _generate_generic_exercises_ai(day: date, count: int) -> list[tuple[str, str, str]]:
+    """KAN-131: la IA crea ejercicios genericos del dia; si falla, se usa la rotacion fija."""
+    api_key = os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return []
+    try:
+        payload = json.dumps({
+            "model": os.getenv("AURA_OPENAI_MODEL", "gpt-4.1-mini"),
+            "instructions": (
+                "Eres Faro, asistente de acompanamiento de personas con problemas de memoria. Crea ejercicios "
+                "cognitivos GENERICOS (no personalizados). Devuelve SOLO un JSON array de objetos "
+                "{category, question, expected_answer}, sin ningun texto extra. category debe ser una de: "
+                "recall, orientation, naming, movement. question breve, en espanol de Espana, para preguntar en "
+                "voz alta. expected_answer: respuesta esperada corta."
+            ),
+            "input": f"Crea exactamente {count} ejercicios variados del dia. Fecha: {day.isoformat()}.",
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            "https://api.openai.com/v1/responses", data=payload, method="POST",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        text = _openai_response_text(data) or ""
+        start, end = text.find("["), text.rfind("]")
+        if start < 0 or end < 0:
+            return []
+        items = json.loads(text[start:end + 1])
+        result: list[tuple[str, str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            category = str(item.get("category") or "").strip()
+            question = str(item.get("question") or "").strip()
+            answer = str(item.get("expected_answer") or "").strip()
+            if category in {"recall", "orientation", "naming", "movement"} and question:
+                result.append((category, question, answer))
+        return result[:count]
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError, ValueError):
+        return []
+
+
 def ensure_daily_generic_exercises(reference: Optional[datetime] = None) -> int:
     """KAN-131: crea una sola vez por dia ejercicios genericos proactivos (rotacion por dia)."""
     moment = reference or now()
@@ -2809,12 +2851,17 @@ def ensure_daily_generic_exercises(reference: Optional[datetime] = None) -> int:
     if already:
         return 0
     created = 0
+    ai_items = _generate_generic_exercises_ai(day, DAILY_GENERIC_COUNT)
     for offset in range(DAILY_GENERIC_COUNT):
-        category, question = DAILY_GENERIC_QUESTIONS[(day.toordinal() + offset) % len(DAILY_GENERIC_QUESTIONS)]
+        if offset < len(ai_items):
+            category, question, expected_answer = ai_items[offset]
+        else:
+            category, question = DAILY_GENERIC_QUESTIONS[(day.toordinal() + offset) % len(DAILY_GENERIC_QUESTIONS)]
+            expected_answer = ""
         scheduled = local_moment.replace(hour=10 + offset, minute=30, second=0, microsecond=0)
         exercise = CognitiveExercise(
             id=uuid4(), memory_id=None, category=category, question=question,
-            expected_answer="", created_at=moment, status="pending", notes="auto-daily",
+            expected_answer=expected_answer, created_at=moment, status="pending", notes="auto-daily",
             scheduled_at=scheduled,
         )
         repository.cognitive_exercises[exercise.id] = exercise
