@@ -1154,6 +1154,11 @@ class InMemoryRepository:
             else self.data_file.parent / "review-images" if self.data_file else Path("review-images")
         )
         self.review_images_dir.mkdir(parents=True, exist_ok=True)
+        self.alert_images_dir = (
+            Path(os.environ["AURA_ALERT_MEDIA_DIR"]) if os.getenv("AURA_ALERT_MEDIA_DIR")
+            else (self.data_file.parent / "alert-images") if self.data_file else Path("alert-images")
+        )
+        self.alert_images_dir.mkdir(parents=True, exist_ok=True)
         self.people: dict[UUID, Person] = {}
         if self.data_file and self.data_file.exists():
             for raw in json.loads(self.data_file.read_text(encoding="utf-8")):
@@ -1412,6 +1417,16 @@ class InMemoryRepository:
             return review_cipher().decrypt(path.read_bytes())
         except Exception:  # noqa: BLE001 - una evidencia ilegible se trata como ausente
             return None
+
+    def save_alert_image(self, alert_id: UUID, image: bytes) -> None:
+        path = self.alert_images_dir / f"{alert_id}.jpg"
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_bytes(image)
+        os.replace(temporary, path)
+
+    def load_alert_image(self, alert_id: UUID) -> Optional[bytes]:
+        path = self.alert_images_dir / f"{alert_id}.jpg"
+        return path.read_bytes() if path.exists() else None
 
     def delete_review_evidence(self, review_id: UUID) -> None:
         path = self._review_evidence_path(review_id)
@@ -2595,12 +2610,15 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
         photo_status = "sent" if "sent" in statuses else statuses[0]
     alert = draft.model_copy(update={"delivery_status": delivery_status, "provider_message_id": message_id})
     repository.emergency_alerts[alert.id] = alert
+    if image is not None:
+        repository.save_alert_image(alert.id, image)
     repository.add_event(EventCreate(
         kind="help_request" if request.kind == "episode" else "location",
         summary=request.spoken_message, source="glasses", severity="urgent",
         latitude=request.latitude, longitude=request.longitude,
         metadata={"alert_id": str(alert.id), "delivery_status": delivery_status,
                   "photo_delivery_status": photo_status,
+                  "has_photo": image is not None,
                   "location_included": request.latitude is not None and request.longitude is not None,
                   "location_approximate": request.latitude is not None and (
                       request.location_accuracy_meters is None
@@ -2614,6 +2632,18 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
                   "recipient_failures": len(failures)},
     ))
     return alert
+
+
+@app.get("/v1/emergency-alerts/{alert_id}/image", response_class=Response)
+def get_emergency_alert_image(alert_id: UUID, authorization: Optional[str] = Header(default=None)) -> Response:
+    """KAN-151: imagen capturada en el aviso, para verla en la seccion Memoria."""
+    require_auth(authorization)
+    if repository.emergency_alerts.get(alert_id) is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    image = repository.load_alert_image(alert_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail="This alert has no image")
+    return Response(content=image, media_type="image/jpeg", headers={"Cache-Control": "no-store, private"})
 
 
 class VoiceIntentResult(BaseModel):
