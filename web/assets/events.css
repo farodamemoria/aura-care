@@ -22,3 +22,20 @@
   color: #526c62;
   font-weight: 700;
 }
+
+.event-photo {
+  display: block;
+  margin-top: 8px;
+  max-width: 170px;
+  max-height: 170px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  cursor: zoom-in;
+}
+
+.event-photo.expanded {
+  max-width: none;
+  max-height: none;
+  width: 100%;
+  cursor: zoom-out;
+}

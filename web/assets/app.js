@@ -248,6 +248,20 @@ function eventCard(event) {
   details.className = 'event-details';
   details.textContent = alertDetails(event);
   if (details.textContent) article.append(details);
+  const meta = event.metadata || {};
+  if (meta.has_photo && meta.alert_id) {
+    const foto = document.createElement('img');
+    foto.className = 'event-photo';
+    foto.loading = 'lazy';
+    foto.alt = 'Foto capturada en el momento';
+    foto.hidden = true;
+    foto.onclick = () => foto.classList.toggle('expanded');
+    fetch(`/v1/emergency-alerts/${meta.alert_id}/image`, {headers: authHeaders})
+      .then(response => (response.ok ? response.blob() : null))
+      .then(blob => { if (blob) { foto.src = URL.createObjectURL(blob); foto.hidden = false; } })
+      .catch(() => {});
+    article.append(foto);
+  }
   return article;
 }
 
