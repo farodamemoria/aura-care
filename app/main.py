@@ -2334,6 +2334,22 @@ def update_patient_profile(
     return request
 
 
+def bearing_degrees(latitude_a: float, longitude_a: float, latitude_b: float, longitude_b: float) -> float:
+    """KAN-36: rumbo (0-360) desde el punto A hacia el B."""
+    phi_a, phi_b = math.radians(latitude_a), math.radians(latitude_b)
+    delta_lambda = math.radians(longitude_b - longitude_a)
+    x = math.sin(delta_lambda) * math.cos(phi_b)
+    y = math.cos(phi_a) * math.sin(phi_b) - math.sin(phi_a) * math.cos(phi_b) * math.cos(delta_lambda)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+_CARDINALS = ("norte", "noreste", "este", "sureste", "sur", "suroeste", "oeste", "noroeste")
+
+
+def cardinal_direction(degrees: float) -> str:
+    return _CARDINALS[int((degrees + 22.5) // 45) % 8]
+
+
 def distance_meters(latitude_a: float, longitude_a: float, latitude_b: float, longitude_b: float) -> float:
     radius = 6_371_000.0
     phi_a, phi_b = math.radians(latitude_a), math.radians(latitude_b)
@@ -2423,7 +2439,13 @@ def answer_location_question(
         message = "No parece que estés en casa."
     if home and home.latitude is not None and home.longitude is not None:
         distance = distance_meters(request.latitude, request.longitude, home.latitude, home.longitude)
-        message += f" Estás a unos {int(round(distance))} metros de casa."
+        direction = cardinal_direction(
+            bearing_degrees(request.latitude, request.longitude, home.latitude, home.longitude)
+        )
+        message += (
+            f" Para volver a casa, camina unos {int(round(distance))} metros hacia el {direction}; "
+            "dime cuando avances y te voy guiando."
+        )
     return LocationAnswer(
         status="coordinates_available",
         message=message,

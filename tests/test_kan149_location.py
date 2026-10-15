@@ -57,4 +57,4 @@ def test_away_reports_surroundings(client: TestClient, monkeypatch: pytest.Monke
     body = response.json()
     assert body["status"] == "coordinates_available"
     assert "cerca de" in body["message"]
-    assert "metros de casa" in body["message"]
+    assert "hacia el" in body["message"]
