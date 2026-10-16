@@ -4605,6 +4605,59 @@ def resolve_review(review_id: UUID, resolution: ReviewResolution, authorization:
     return updated
 
 
+class ReviewPersonCreate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+    relationship: str = Field(min_length=1, max_length=80)
+    consent_granted: bool
+
+
+@app.post("/v1/reviews/{review_id}/create-person", response_model=Person, status_code=201)
+def create_person_from_review(
+    review_id: UUID, request: ReviewPersonCreate,
+    authorization: Optional[str] = Header(default=None),
+) -> Person:
+    """KAN-154: alta de persona conocida directamente desde 'Por aclarar' (nombre + relacion).
+
+    Exige consentimiento explicito (consent_granted=true) antes de crear o enrolar. Si el proveedor
+    facial falla, la persona se crea sin enrolamiento (no se marca enrollment_complete) y la evidencia
+    de la revision se conserva para no perder la foto de la persona.
+    """
+    require_auth(authorization)
+    if not request.consent_granted:
+        raise HTTPException(status_code=422, detail="Explicit consent is required before enrollment")
+    review = repository.reviews.get(review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found")
+    person = Person(
+        id=uuid4(), created_at=now(), display_name=request.display_name.strip(),
+        relationship=request.relationship.strip(), consent_granted=True,
+    )
+    evidence = repository.load_review_image(review_id)
+    enrolled = False
+    if evidence:
+        indexed = 0
+        try:
+            indexed = face_provider.enroll(person.id, [evidence])
+        except Exception:
+            indexed = 0
+        if indexed >= 1:
+            photos_saved = repository.save_person_photos(person.id, [evidence])
+            person = person.model_copy(update={
+                "enrollment_samples": indexed,
+                "enrollment_complete": True,
+                "profile_photo_available": photos_saved > 0,
+            })
+            enrolled = True
+    with repository.lock:
+        repository.people[person.id] = person
+        repository.save_people()
+    updated = review.model_copy(update={"status": "resolved", "resolved_person_id": person.id})
+    repository.save_review(updated)
+    if enrolled:
+        repository.delete_review_evidence(review_id)
+    return person
+
+
 @app.post("/v1/reviews/{review_id}/suggestion/dismiss", response_model=ReviewItem)
 def dismiss_review_suggestion(review_id: UUID, authorization: Optional[str] = Header(default=None)) -> ReviewItem:
     """Descarta la hipotesis sugerida sin tocar la revision (KAN-67); nunca confirma identidad."""

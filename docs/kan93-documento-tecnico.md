@@ -199,7 +199,8 @@ Reconocimiento y revisiones:
 
 - `POST /v1/recognitions`, `GET /v1/reviews`,
   `GET /v1/reviews/{review_id}/image`, `POST /v1/reviews/{review_id}/resolve`,
-  `POST /v1/reviews/{review_id}/suggestion/dismiss`.
+  `POST /v1/reviews/{review_id}/create-person` (alta directa de persona conocida desde «Por aclarar»
+  con consentimiento explícito; KAN-154), `POST /v1/reviews/{review_id}/suggestion/dismiss`.
 
 Red de cuidados:
 
