@@ -2734,7 +2734,7 @@ async def voice_intent(
         summary = "Se detectaron episodios de tos"
     else:
         kind = "hazard"
-        message = "Faro: posible caída ou golpe forte detectado."
+        message = "Faro: posible caída o golpe fuerte detectado."
         summary = "Posible caída o golpe fuerte detectado"
     alert_status = None
     contacts = enabled_alert_contacts()
@@ -3296,17 +3296,17 @@ def record_protective_observation(
     if request.kind == "fridge_open":
         action, message, severity = "remind", "A neveira parece levar un anaco aberta. Queres pechala?", "attention"
     elif request.kind == "door_open":
-        action, message, severity = "remind", "A porta parece quedar aberta. Queres comprobala?", "attention"
+        action, message, severity = "remind", "La puerta parece quedar abierta. ¿Quieres comprobarla?", "attention"
     elif request.kind == "water_running":
-        action, message, severity = "warn", "Parece que a auga segue correndo. Imos pechala con calma.", "urgent"
+        action, message, severity = "warn", "Parece que el agua sigue corriendo. Vamos a cerrarla con calma.", "urgent"
     elif request.kind == "smoke_or_fire":
-        action, message, severity = "warn", "Vexo sinais de lume ou fume. Imos afastarnos con calma e pedir axuda.", "urgent"
+        action, message, severity = "warn", "Veo señales de fuego o humo. Vamos a alejarnos con calma y pedir ayuda.", "urgent"
     elif request.kind == "broken_glass":
-        action, message, severity = "warn", "Parece que hai cristais rotos. Non te achegues; imos pedir axuda.", "urgent"
+        action, message, severity = "warn", "Parece que hay cristales rotos. No te acerques; vamos a pedir ayuda.", "urgent"
     elif request.kind == "dangerous_impact":
-        action, message, severity = "warn", "Parece que ocorreu un golpe forte. Queda nun lugar seguro mentres pedimos axuda.", "urgent"
+        action, message, severity = "warn", "Parece que ha ocurrido un golpe fuerte. Quédate en un lugar seguro mientras pedimos ayuda.", "urgent"
     else:
-        action, message, severity = "warn", "Parece que quedou algo quentando no lume. Imos apagalo con calma.", "urgent"
+        action, message, severity = "warn", "Parece que algo se ha quedado calentando al fuego. Vamos a apagarlo con calma.", "urgent"
     family_alert_status = None
     photo_delivery_status = None
     location_included = False
@@ -3451,25 +3451,25 @@ FAMILY_DAY_LABELS: dict[str, dict] = {
         "and": " y ",
     },
     "gl": {
-        "empty": "Hoxe aínda non hai actividade rexistrada para o paciente.",
-        "header": "Hoxe rexistráronse {total} acontecementos.",
+        "empty": "Hoy todavía no hay actividad registrada para el paciente.",
+        "header": "Hoy se han registrado {total} acontecimientos.",
         "kinds": {
-            "conversation": ("{count} conversa con Faro", "{count} conversas con Faro"),
-            "recognition": ("{count} recoñecemento de persoas", "{count} recoñecementos de persoas"),
-            "help_request": ("{count} petición de axuda", "{count} peticións de axuda"),
+            "conversation": ("{count} conversación con Faro", "{count} conversaciones con Faro"),
+            "recognition": ("{count} reconocimiento de personas", "{count} reconocimientos de personas"),
+            "help_request": ("{count} petición de ayuda", "{count} peticiones de ayuda"),
             "hazard": ("{count} aviso preventivo", "{count} avisos preventivos"),
-            "episode": ("{count} posible perda de memoria", "{count} posibles perdas de memoria"),
-            "location": ("{count} actualización de localización", "{count} actualizacións de localización"),
-            "object_location": ("{count} obxecto recordado", "{count} obxectos recordados"),
-            "caregiver_action": ("{count} acción da familia", "{count} accións da familia"),
+            "episode": ("{count} posible pérdida de memoria", "{count} posibles pérdidas de memoria"),
+            "location": ("{count} actualización de ubicación", "{count} actualizaciones de ubicación"),
+            "object_location": ("{count} objeto recordado", "{count} objetos recordados"),
+            "caregiver_action": ("{count} acción de la familia", "{count} acciones de la familia"),
             "routine": ("{count} rutina", "{count} rutinas"),
-            "system": ("{count} aviso do sistema", "{count} avisos do sistema"),
+            "system": ("{count} aviso del sistema", "{count} avisos del sistema"),
         },
-        "recognized": "Recoñeceuse a {names}.",
-        "urgent": "Hai {count} aviso(s) importante(s) que convén revisar.",
-        "closing": "Sen máis incidencias destacables.",
+        "recognized": "Se reconoció a {names}.",
+        "urgent": "Hay {count} aviso(s) importante(s) que conviene revisar.",
+        "closing": "Sin más incidencias destacables.",
         "join": ", ",
-        "and": " e ",
+        "and": " y ",
     },
     "en": {
         "empty": "There is no activity registered for the patient today yet.",
@@ -3533,21 +3533,21 @@ FAMILY_FOCUSED_LABELS: dict[str, dict] = {
         "line": "{time} — {summary}",
     },
     "gl": {
-        "warnings": ("Hoxe hai {count} aviso de seguridade:", "Hoxe hai {count} avisos de seguridade:"),
-        "recognitions": ("Hoxe recoñeceuse a {count} persoa:", "Hoxe recoñecéronse {count} persoas:"),
-        "conversations": ("Hoxe hai {count} conversa:", "Hoxe hai {count} conversas:"),
-        "location": ("Hoxe hai {count} actualización de localización:", "Hoxe hai {count} actualizacións de localización:"),
-        "objects": ("Hoxe hai {count} obxecto recordado:", "Hoxe hai {count} obxectos recordados:"),
-        "help": ("Hoxe hai {count} petición de axuda:", "Hoxe hai {count} peticións de axuda:"),
-        "memory": ("Hoxe hai {count} posible perda de memoria:", "Hoxe hai {count} posibles perdas de memoria:"),
+        "warnings": ("Hoy hay {count} aviso de seguridad:", "Hoy hay {count} avisos de seguridad:"),
+        "recognitions": ("Hoy se reconoció a {count} persona:", "Hoy se reconocieron {count} personas:"),
+        "conversations": ("Hoy hay {count} conversación:", "Hoy hay {count} conversaciones:"),
+        "location": ("Hoy hay {count} actualización de ubicación:", "Hoy hay {count} actualizaciones de ubicación:"),
+        "objects": ("Hoy hay {count} objeto recordado:", "Hoy hay {count} objetos recordados:"),
+        "help": ("Hoy hay {count} petición de ayuda:", "Hoy hay {count} peticiones de ayuda:"),
+        "memory": ("Hoy hay {count} posible pérdida de memoria:", "Hoy hay {count} posibles pérdidas de memoria:"),
         "none": {
-            "warnings": "Hoxe non se rexistrou ningún aviso de seguridade.",
-            "recognitions": "Hoxe non se recoñeceu a ninguén.",
-            "conversations": "Hoxe non hai conversas rexistradas.",
-            "location": "Hoxe non hai actualizacións de localización.",
-            "objects": "Hoxe non se recordou ningún obxecto.",
-            "help": "Hoxe non houbo peticións de axuda.",
-            "memory": "Hoxe non se rexistrou ningunha perda de memoria.",
+            "warnings": "Hoy no se ha registrado ningún aviso de seguridad.",
+            "recognitions": "Hoy no se ha reconocido a nadie.",
+            "conversations": "Hoy no hay conversaciones registradas.",
+            "location": "Hoy no hay actualizaciones de ubicación.",
+            "objects": "Hoy no se ha recordado ningún objeto.",
+            "help": "Hoy no ha habido peticiones de ayuda.",
+            "memory": "Hoy no se ha registrado ninguna pérdida de memoria.",
         },
         "line": "{time} — {summary}",
     },
@@ -3633,7 +3633,7 @@ def family_target_date(question: str) -> date:
 
 def family_day_label(target: date, language: str) -> str:
     today = now().astimezone(family_zone()).date()
-    current, previous = {"es": ("hoy", "ayer"), "gl": ("hoxe", "onte"), "en": ("today", "yesterday")}.get(
+    current, previous = {"es": ("hoy", "ayer"), "gl": ("hoy", "ayer"), "en": ("today", "yesterday")}.get(
         language, ("hoy", "ayer")
     )
     if target == today:
@@ -3643,14 +3643,12 @@ def family_day_label(target: date, language: str) -> str:
     months = MONTH_NAMES.get(language, MONTH_NAMES["es"])
     if language == "en":
         return f"on {months[target.month - 1]} {target.day}, {target.year}"
-    prefix = "o" if language == "gl" else "el"
+    prefix = "el"
     return f"{prefix} {target.day} de {months[target.month - 1]} de {target.year}"
 
 
 def localize_day(text: str, day_label: str, language: str) -> str:
     capitalized = day_label[:1].upper() + day_label[1:]
-    if language == "gl":
-        return text.replace("Hoxe ", capitalized + " ").replace("Hoxe", capitalized)
     if language == "en":
         return text.replace("today", day_label)
     return text.replace("Hoy ", capitalized + " ").replace("Hoy", capitalized)
@@ -3678,7 +3676,7 @@ FAMILY_PERIOD_LABELS: dict[str, dict[int, str]] = {
 }
 FAMILY_PERIOD_PREVIOUS: dict[str, dict[int, str]] = {
     "es": {7: "la semana pasada", 30: "el mes pasado"},
-    "gl": {7: "a semana pasada", 30: "o mes pasado"},
+    "gl": {7: "la semana pasada", 30: "el mes pasado"},
     "en": {7: "last week", 30: "last month"},
 }
 
@@ -3800,8 +3798,8 @@ OBJECT_LOOKUP_LABELS = {
         "found_no_place": "Se vio {object} por última vez {moment}.",
     },
     "gl": {
-        "found": "Viu {object} por última vez en {place} ({moment}).",
-        "found_no_place": "Viu {object} por última vez {moment}.",
+        "found": "Se vio {object} por última vez en {place} ({moment}).",
+        "found_no_place": "Se vio {object} por última vez {moment}.",
     },
     "en": {
         "found": "{object} was last seen in {place} ({moment}).",
@@ -4360,13 +4358,13 @@ def help_protocol(authorization: Optional[str] = Header(default=None)) -> HelpPr
             guidance="Todavía no hay un familiar o cuidador de referencia en la red de cuidados.",
             updated_at=now(),
         )
-    where_gl = location_label or "a dirección da miña ficha"
+    where_gl = location_label or "la dirección de mi ficha"
     where_es = location_label or "la dirección de mi ficha"
     return HelpProtocol(
         patient_name=patient_name,
         location_label=location_label,
         phrase_gl=(
-            f"Ola, teño problemas de memoria e necesito axuda. Podes chamar a "
+            f"Hola, tengo problemas de memoria y necesito ayuda. ¿Puedes llamar a "
             f"{primary.display_name} ({primary.role}) ao {primary.phone_e164}? Estou en {where_gl}."
         ),
         phrase_es=(
