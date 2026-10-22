@@ -3841,7 +3841,7 @@ def family_is_closing(text: str) -> bool:
 
 
 def family_day_events(start: datetime, end: datetime) -> list[Event]:
-    events = repository.list_events(500, None)
+    events = repository.list_events(500, None, start, end)
     relevant = [
         event for event in events
         if start <= event.occurred_at <= end
