@@ -101,6 +101,17 @@ def test_persiste_tras_reinicio(client: TestClient) -> None:
     assert listed[0]["place"] == "salon"
 
 
+def test_estado_en_casa(client: TestClient) -> None:
+    tracker = _create(client)
+    response = client.post(
+        f"/v1/trackers/{tracker['id']}/status",
+        json={"status": "home", "source": "tracker"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "home"
+
+
 def test_renombra_tracker(client: TestClient) -> None:
     tracker = _create(client)
     response = client.patch(
