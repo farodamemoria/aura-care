@@ -1708,19 +1708,43 @@ class InMemoryRepository:
             self.event_db.commit()
 
     def take_voice_reminders(self) -> list[dict]:
+        stamp = None
+        rows: list = []
         with self.lock:
             rows = self.event_db.execute(
                 "SELECT id, event_id, message, created_at FROM voice_reminders "
                 "WHERE spoken_at IS NULL ORDER BY created_at ASC LIMIT 20"
             ).fetchall()
             if rows:
-                stamp = now().isoformat()
+                stamp = now()
                 self.event_db.executemany(
                     "UPDATE voice_reminders SET spoken_at=? WHERE id=?",
-                    [(stamp, row["id"]) for row in rows],
+                    [(stamp.isoformat(), row["id"]) for row in rows],
                 )
                 self.event_db.commit()
-            return [dict(row) for row in rows]
+        delivered = 0
+        if rows and stamp is not None:
+            for row in rows:
+                try:
+                    exercise_id = UUID(str(row["event_id"]))
+                except (ValueError, TypeError):
+                    continue
+                exercise = self.cognitive_exercises.get(exercise_id)
+                if exercise is not None and exercise.asked_at is None:
+                    self.cognitive_exercises[exercise.id] = exercise.model_copy(
+                        update={"asked_at": stamp}
+                    )
+                    delivered += 1
+        if delivered:
+            self.save_cognitive_exercises()
+        return [dict(row) for row in rows]
+
+    def pending_voice_reminder_event_ids(self) -> set[str]:
+        with self.lock:
+            rows = self.event_db.execute(
+                "SELECT DISTINCT event_id FROM voice_reminders WHERE spoken_at IS NULL"
+            ).fetchall()
+        return {str(row[0]) for row in rows}
 
     def list_family_alert_rules(self) -> list[dict]:
         rows = self.event_db.execute(
@@ -5209,16 +5233,21 @@ def refresh_abandoned(reference: Optional[datetime] = None) -> int:
 def run_exercise_tick(reference: Optional[datetime] = None) -> int:
     reference = reference or now()
     ensure_daily_generic_exercises(reference)
+    queued_ids = repository.pending_voice_reminder_event_ids()
     asked = 0
     for exercise in list(repository.cognitive_exercises.values()):
-        if exercise.status != "pending" or exercise.scheduled_at is None or exercise.asked_at is not None:
+        if exercise.status != "pending" or exercise.scheduled_at is None:
             continue
-        if exercise.scheduled_at <= reference:
-            repository.enqueue_voice_reminder(exercise.id, exercise.question)
-            repository.cognitive_exercises[exercise.id] = exercise.model_copy(update={"asked_at": reference})
-            asked += 1
-    if asked:
-        repository.save_cognitive_exercises()
+        if exercise.scheduled_at > reference:
+            continue
+        if exercise.patient_answer is not None or exercise.abandoned:
+            continue
+        if exercise.asked_at is not None:
+            continue
+        if str(exercise.id) in queued_ids:
+            continue
+        repository.enqueue_voice_reminder(exercise.id, exercise.question)
+        asked += 1
     return asked
 
 

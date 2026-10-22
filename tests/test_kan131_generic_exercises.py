@@ -59,5 +59,6 @@ def test_aparecen_en_la_lista_de_ejercicios(client: TestClient) -> None:
 def test_el_tick_los_crea_y_los_pregunta_por_voz(client: TestClient) -> None:
     future = (main.now() + timedelta(days=7)).replace(hour=20, minute=0, second=0, microsecond=0)
     assert main.run_exercise_tick(future) == 3
+    main.repository.take_voice_reminders()
     assert all(exercise.asked_at is not None for exercise in _auto_daily())
     assert main.run_exercise_tick(future) == 0
