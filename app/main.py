@@ -902,7 +902,7 @@ class TrackerUpdate(BaseModel):
 
 
 class TrackerStatusUpdate(BaseModel):
-    status: str = Field(pattern="^(near|far|lost|unknown)$")
+    status: str = Field(pattern="^(near|far|lost|unknown|home)$")
     place: str = Field(default="", max_length=120)
     source: str = Field(default="manual", pattern="^(manual|phone|portal|ai|tracker)$")
 
