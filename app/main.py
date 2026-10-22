@@ -891,6 +891,34 @@ class VideoConsentUpdate(BaseModel):
     notes: str = Field(default="", max_length=300)
 
 
+class TrackerCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    kind: str = Field(default="keys", pattern="^(keys|wallet|bag|other)$")
+
+
+class TrackerUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    kind: Optional[str] = Field(default=None, pattern="^(keys|wallet|bag|other)$")
+
+
+class TrackerStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(near|far|lost|unknown)$")
+    place: str = Field(default="", max_length=120)
+    source: str = Field(default="manual", pattern="^(manual|phone|portal|ai|tracker)$")
+
+
+class Tracker(BaseModel):
+    id: UUID
+    name: str
+    kind: str = "keys"
+    status: str = "unknown"
+    place: str = ""
+    source: str = "manual"
+    last_seen_at: Optional[datetime] = None
+    updated_at: datetime
+
+
+
 class LiveViewRequestCreate(BaseModel):
     source: str = Field(pattern="^(glasses|phone)$")
     reason: str = Field(default="", max_length=300)
@@ -1173,6 +1201,7 @@ class InMemoryRepository:
         self.calendar_events: dict[UUID, CalendarEvent] = {}
         self.reviews: dict[UUID, ReviewItem] = {}
         self.live_views: dict[UUID, LiveViewRequest] = {}
+        self.trackers: dict[UUID, Tracker] = {}
         self.recognition_times: dict[str, deque[datetime]] = defaultdict(deque)
         self.last_outcome: dict[str, datetime] = {}
         self.last_review_created: dict[str, datetime] = {}
@@ -1196,6 +1225,7 @@ class InMemoryRepository:
         self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at DESC)")
         self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind, occurred_at DESC)")
         self.event_db.execute("CREATE TABLE IF NOT EXISTS configuration (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        self._load_trackers()
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS pairing_invites (
             code_hash TEXT PRIMARY KEY, role TEXT NOT NULL, care_circle_id TEXT NOT NULL,
             expires_at TEXT NOT NULL, consumed_at TEXT
@@ -1904,6 +1934,82 @@ class InMemoryRepository:
     def get_onboarding(self) -> Optional[OnboardingConfiguration]:
         row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='onboarding'").fetchone()
         return OnboardingConfiguration.model_validate_json(row[0]) if row else None
+
+    def _load_trackers(self) -> None:
+        row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='trackers'").fetchone()
+        if not row:
+            return
+        try:
+            raw = json.loads(row[0])
+        except (TypeError, ValueError):
+            return
+        for item in raw if isinstance(raw, list) else []:
+            try:
+                tracker = Tracker.model_validate(item)
+            except Exception:
+                continue
+            self.trackers[tracker.id] = tracker
+
+    def _save_trackers(self) -> None:
+        self.event_db.execute(
+            "INSERT OR REPLACE INTO configuration(key, value_json) VALUES('trackers', ?)",
+            (json.dumps([tracker.model_dump(mode="json") for tracker in self.trackers.values()], ensure_ascii=False),),
+        )
+        self.event_db.commit()
+
+    def list_trackers(self) -> list[Tracker]:
+        with self.lock:
+            return sorted(self.trackers.values(), key=lambda tracker: tracker.name.lower())
+
+    def create_tracker(self, name: str, kind: str) -> Tracker:
+        with self.lock:
+            tracker = Tracker(id=uuid4(), name=name.strip(), kind=kind, updated_at=now())
+            self.trackers[tracker.id] = tracker
+            self._save_trackers()
+            return tracker
+
+    def update_tracker(self, tracker_id: UUID, name: Optional[str], kind: Optional[str]) -> Optional[Tracker]:
+        with self.lock:
+            tracker = self.trackers.get(tracker_id)
+            if tracker is None:
+                return None
+            if name is not None:
+                tracker.name = name.strip()
+            if kind is not None:
+                tracker.kind = kind
+            tracker.updated_at = now()
+            self._save_trackers()
+            return tracker
+
+    def set_tracker_status(
+        self, tracker_id: UUID, status: str, place: str, source: str,
+    ) -> Optional[Tracker]:
+        with self.lock:
+            tracker = self.trackers.get(tracker_id)
+            if tracker is None:
+                return None
+            tracker.status = status
+            tracker.place = place.strip()
+            tracker.source = source
+            tracker.last_seen_at = now()
+            tracker.updated_at = now()
+            self._save_trackers()
+            return tracker
+
+    def find_tracker_by_name(self, name: str) -> Optional[Tracker]:
+        wanted = name.strip().lower()
+        if not wanted:
+            return None
+        with self.lock:
+            trackers = list(self.trackers.values())
+        for tracker in trackers:
+            if tracker.name.strip().lower() == wanted:
+                return tracker
+        for tracker in trackers:
+            current = tracker.name.strip().lower()
+            if wanted in current or current in wanted:
+                return tracker
+        return None
 
     def get_patient_profile(self) -> Optional[CaredPersonProfile]:
         row = self.event_db.execute("SELECT value_json FROM configuration WHERE key='patient_profile'").fetchone()
@@ -4386,6 +4492,54 @@ def list_devices(authorization: Optional[str] = Header(default=None)) -> DeviceI
     """KAN-75 Fase 1: inventario de dispositivos autorizados y actividad reciente por canal."""
     require_auth(authorization)
     return repository.device_inventory()
+
+
+@app.get("/v1/trackers", response_model=list[Tracker])
+def list_trackers(authorization: Optional[str] = Header(default=None)) -> list[Tracker]:
+    """KAN-165: rastreadores vinculados (llaves, cartera...) y su ultimo estado conocido."""
+    require_auth(authorization)
+    return repository.list_trackers()
+
+
+@app.get("/v1/trackers/status", response_model=Tracker)
+def tracker_status_by_name(name: str, authorization: Optional[str] = Header(default=None)) -> Tracker:
+    """Busqueda por nombre para que la IA responda '¿donde estan las llaves?'."""
+    require_auth(authorization)
+    tracker = repository.find_tracker_by_name(name)
+    if tracker is None:
+        raise HTTPException(status_code=404, detail="Tracker not found")
+    return tracker
+
+
+@app.post("/v1/trackers", response_model=Tracker, status_code=201)
+def create_tracker(request: TrackerCreate, authorization: Optional[str] = Header(default=None)) -> Tracker:
+    require_auth(authorization)
+    if repository.find_tracker_by_name(request.name) is not None:
+        raise HTTPException(status_code=409, detail="Tracker already exists")
+    return repository.create_tracker(request.name, request.kind)
+
+
+@app.patch("/v1/trackers/{tracker_id}", response_model=Tracker)
+def update_tracker(
+    tracker_id: UUID, request: TrackerUpdate, authorization: Optional[str] = Header(default=None),
+) -> Tracker:
+    require_auth(authorization)
+    tracker = repository.update_tracker(tracker_id, request.name, request.kind)
+    if tracker is None:
+        raise HTTPException(status_code=404, detail="Tracker not found")
+    return tracker
+
+
+@app.post("/v1/trackers/{tracker_id}/status", response_model=Tracker)
+def update_tracker_status(
+    tracker_id: UUID, request: TrackerStatusUpdate, authorization: Optional[str] = Header(default=None),
+) -> Tracker:
+    """Actualiza el estado del rastreador (cerca/lejos/perdido) y el sitio donde se vio."""
+    require_auth(authorization)
+    tracker = repository.set_tracker_status(tracker_id, request.status, request.place, request.source)
+    if tracker is None:
+        raise HTTPException(status_code=404, detail="Tracker not found")
+    return tracker
 
 
 @app.post("/v1/device-credentials/validate", response_model=DeviceCredentialStatus)
