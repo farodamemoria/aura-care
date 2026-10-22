@@ -265,6 +265,11 @@ Emparejamiento y dispositivos:
   `POST /v1/device-credentials/validate`, `GET /v1/devices`,
   `PUT /v1/devices/video-consent`.
 
+Rastreadores vinculados (KAN-165):
+
+- `GET /v1/trackers`, `POST /v1/trackers`, `GET /v1/trackers/status`,
+  `PATCH /v1/trackers/{tracker_id}`, `POST /v1/trackers/{tracker_id}/status`.
+
 Vistas en directo (KAN-75):
 
 - `GET /v1/live-views`, `POST /v1/live-views`, `POST /v1/live-views/{view_id}/status`.
