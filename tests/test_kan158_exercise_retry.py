@@ -76,3 +76,17 @@ def test_entregado_no_se_vuelve_a_encolar(client: TestClient) -> None:
 def test_futuro_no_se_encola(client: TestClient) -> None:
     _schedule(client, minutes_ago=-60)
     assert client.post("/v1/cognitive-exercises/tick", headers=HEADERS).json()["asked"] == 0
+
+
+def test_reintenta_el_que_no_se_entrego(client: TestClient) -> None:
+    exercise = _schedule(client)
+    assert client.post("/v1/cognitive-exercises/tick", headers=HEADERS).json()["asked"] == 1
+    client.get("/v1/voice-reminders", headers=HEADERS)
+    assert _exercise(exercise["id"]).asked_at is not None
+
+    retry = client.post(f"/v1/voice-reminders/{exercise['id']}/retry", headers=HEADERS)
+    assert retry.status_code == 200
+    assert _exercise(exercise["id"]).asked_at is None
+    again = client.get("/v1/voice-reminders", headers=HEADERS).json()
+    assert len(again) == 1
+    assert _exercise(exercise["id"]).asked_at is not None

@@ -1746,6 +1746,28 @@ class InMemoryRepository:
             ).fetchall()
         return {str(row[0]) for row in rows}
 
+    def retry_voice_reminder(self, event_id: UUID) -> bool:
+        """KAN-169: si la entrega fallo (WS caido), devolver el recordatorio a la cola."""
+        with self.lock:
+            rows = self.event_db.execute(
+                "SELECT id FROM voice_reminders WHERE event_id=? AND spoken_at IS NOT NULL",
+                (str(event_id),),
+            ).fetchall()
+            if not rows:
+                return False
+            self.event_db.execute(
+                "UPDATE voice_reminders SET spoken_at=NULL WHERE event_id=? AND spoken_at IS NOT NULL",
+                (str(event_id),),
+            )
+            self.event_db.commit()
+        exercise = self.cognitive_exercises.get(event_id)
+        if exercise is not None:
+            self.cognitive_exercises[event_id] = exercise.model_copy(
+                update={"asked_at": None, "abandoned": False}
+            )
+            self.save_cognitive_exercises()
+        return True
+
     def list_family_alert_rules(self) -> list[dict]:
         rows = self.event_db.execute(
             "SELECT id, keywords, description, enabled, created_at FROM family_alert_rules "
@@ -5767,6 +5789,15 @@ def list_voice_reminders(authorization: Optional[str] = Header(default=None)) ->
         VoiceReminder(event_id=UUID(item["event_id"]), message=item["message"], created_at=item["created_at"])
         for item in repository.take_voice_reminders()
     ]
+
+
+@app.post("/v1/voice-reminders/{event_id}/retry")
+def retry_voice_reminder(event_id: UUID, authorization: Optional[str] = Header(default=None)) -> dict:
+    """KAN-169: devuelve a la cola un recordatorio cuya entrega fallo (p. ej. WS caido)."""
+    require_auth(authorization)
+    if not repository.retry_voice_reminder(event_id):
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    return {"success": True}
 
 
 def start_tick_scheduler(interval_seconds: int = 20) -> None:
