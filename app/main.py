@@ -3096,6 +3096,32 @@ def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(defa
     return {"status": "ok", "exercises": exercises_created, "alerts": alerts_created, "days": days}
 
 
+@app.post("/v1/admin/purge-pending-exercises")
+def purge_pending_exercises(
+    past_only: bool = True, authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """KAN-130: borra ejercicios pendientes no ejecutados (por defecto solo los ya vencidos)."""
+    require_auth(authorization)
+    reference = now()
+    removed_ids: list[str] = []
+    for exercise_id, exercise in list(repository.cognitive_exercises.items()):
+        if exercise.status != "pending":
+            continue
+        if past_only and exercise.scheduled_at is not None and exercise.scheduled_at > reference:
+            continue
+        repository.cognitive_exercises.pop(exercise_id, None)
+        removed_ids.append(str(exercise_id))
+    if removed_ids:
+        repository.save_cognitive_exercises()
+        with repository.lock:
+            placeholders = ",".join("?" for _ in removed_ids)
+            repository.event_db.execute(
+                f"DELETE FROM voice_reminders WHERE event_id IN ({placeholders})", removed_ids,
+            )
+            repository.event_db.commit()
+    return {"removed": len(removed_ids), "remaining": len(repository.cognitive_exercises)}
+
+
 @app.post("/v1/alerts/test")
 def test_family_alert(authorization: Optional[str] = Header(default=None)) -> dict:
     """Send a test WhatsApp alert to the care network and report the provider result."""
