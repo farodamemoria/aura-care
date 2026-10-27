@@ -217,6 +217,8 @@ Avisos:
   revisiones y avisos) para poder repetir un anuncio sin esperar.
 - Demos: `POST /v1/admin/seed-demo-history` genera historial de demo (ejercicios y avisos) para
   poblar la pestaña Estadísticas.
+- Demos: `POST /v1/admin/purge-pending-exercises` borra los ejercicios pendientes no ejecutados
+  (por defecto solo los ya vencidos) y sus recordatorios en cola.
 
 Ubicación:
 

@@ -87,3 +87,21 @@ def test_stats_insights_fallback_and_cache(client: TestClient, monkeypatch: pyte
     assert second["cached"] is True
     assert second["insight"] == first["insight"]
     assert client.get("/v1/stats/insights?days=30").status_code == 401
+
+
+def test_purga_pendientes_no_ejecutados(client: TestClient) -> None:
+    past = (main.now() - timedelta(days=1)).isoformat()
+    future = (main.now() + timedelta(days=1)).isoformat()
+    old = client.post(
+        "/v1/cognitive-exercises/scheduled", headers=HEADERS,
+        json={"question": "Viejo", "expected_answer": "x", "scheduled_at": past},
+    ).json()
+    upcoming = client.post(
+        "/v1/cognitive-exercises/scheduled", headers=HEADERS,
+        json={"question": "Futuro", "expected_answer": "x", "scheduled_at": future},
+    ).json()
+    result = client.post("/v1/admin/purge-pending-exercises", headers=HEADERS).json()
+    assert result["removed"] == 1
+    remaining = {item["id"] for item in client.get("/v1/cognitive-exercises", headers=HEADERS).json()}
+    assert old["id"] not in remaining
+    assert upcoming["id"] in remaining
