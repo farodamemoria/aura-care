@@ -270,6 +270,10 @@ class CognitiveExerciseAnswer(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
 
 
+class CognitiveExerciseResponse(BaseModel):
+    answer: str = Field(min_length=1, max_length=1000)
+
+
 class CognitiveExerciseSummary(BaseModel):
     total: int
     pending: int
@@ -379,6 +383,7 @@ class VoiceReminder(BaseModel):
     event_id: UUID
     message: str
     created_at: datetime
+    kind: str = "reminder"
 
 
 class CalendarTickResult(BaseModel):
@@ -1295,8 +1300,11 @@ class InMemoryRepository:
         )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS voice_reminders (
             id TEXT PRIMARY KEY, event_id TEXT NOT NULL, message TEXT NOT NULL,
-            created_at TEXT NOT NULL, spoken_at TEXT
+            created_at TEXT NOT NULL, spoken_at TEXT, kind TEXT NOT NULL DEFAULT 'reminder'
         )""")
+        voice_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(voice_reminders)").fetchall()}
+        if "kind" not in voice_columns:
+            self.event_db.execute("ALTER TABLE voice_reminders ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'")
         calendar_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(calendar_events)").fetchall()}
         for column, statement in (
             ("recurrence", "ALTER TABLE calendar_events ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'"),
@@ -1698,12 +1706,12 @@ class InMemoryRepository:
             self.event_db.commit()
         return rule
 
-    def enqueue_voice_reminder(self, event_id: UUID, message: str) -> None:
+    def enqueue_voice_reminder(self, event_id: UUID, message: str, kind: str = "reminder") -> None:
         with self.lock:
             self.event_db.execute(
-                "INSERT INTO voice_reminders(id, event_id, message, created_at, spoken_at) "
-                "VALUES (?, ?, ?, ?, NULL)",
-                (str(uuid4()), str(event_id), message, now().isoformat()),
+                "INSERT INTO voice_reminders(id, event_id, message, created_at, spoken_at, kind) "
+                "VALUES (?, ?, ?, ?, NULL, ?)",
+                (str(uuid4()), str(event_id), message, now().isoformat(), kind),
             )
             self.event_db.commit()
 
@@ -1712,7 +1720,7 @@ class InMemoryRepository:
         rows: list = []
         with self.lock:
             rows = self.event_db.execute(
-                "SELECT id, event_id, message, created_at FROM voice_reminders "
+                "SELECT id, event_id, message, created_at, kind FROM voice_reminders "
                 "WHERE spoken_at IS NULL ORDER BY created_at ASC LIMIT 20"
             ).fetchall()
             if rows:
@@ -5223,6 +5231,22 @@ def answer_cognitive_exercise(
     return updated
 
 
+@app.post("/v1/cognitive-exercises/{exercise_id}/response", response_model=CognitiveExercise)
+def save_cognitive_exercise_response(
+    exercise_id: UUID, request: CognitiveExerciseResponse,
+    authorization: Optional[str] = Header(default=None),
+) -> CognitiveExercise:
+    """KAN-170: guarda la respuesta libre del paciente cuando Faro pregunta el ejercicio por voz."""
+    require_auth(authorization)
+    exercise = repository.cognitive_exercises.get(exercise_id)
+    if exercise is None:
+        raise HTTPException(status_code=404, detail="Cognitive exercise not found")
+    updated = exercise.model_copy(update={"patient_answer": request.answer.strip()})
+    repository.cognitive_exercises[exercise_id] = updated
+    repository.save_cognitive_exercises()
+    return updated
+
+
 @app.post("/v1/cognitive-exercises/scheduled", response_model=CognitiveExercise, status_code=201)
 def schedule_cognitive_exercise(
     request: ScheduledExerciseCreate, authorization: Optional[str] = Header(default=None),
@@ -5271,7 +5295,7 @@ def run_exercise_tick(reference: Optional[datetime] = None) -> int:
             continue
         if str(exercise.id) in queued_ids:
             continue
-        repository.enqueue_voice_reminder(exercise.id, exercise.question)
+        repository.enqueue_voice_reminder(exercise.id, exercise.question, kind="exercise")
         asked += 1
     return asked
 
@@ -5778,7 +5802,7 @@ def glasses_not_worn(authorization: Optional[str] = Header(default=None)) -> dic
         kind="routine", source="glasses", severity="attention",
         summary="El paciente no lleva las gafas puestas", metadata={"glasses_not_worn": True},
     ))
-    repository.enqueue_voice_reminder(uuid4(), "Pon as gafas, por favor.")
+    repository.enqueue_voice_reminder(uuid4(), "Pon las gafas, por favor.")
     return {"status": "reminded"}
 
 
@@ -5786,7 +5810,10 @@ def glasses_not_worn(authorization: Optional[str] = Header(default=None)) -> dic
 def list_voice_reminders(authorization: Optional[str] = Header(default=None)) -> list[VoiceReminder]:
     require_auth(authorization)
     return [
-        VoiceReminder(event_id=UUID(item["event_id"]), message=item["message"], created_at=item["created_at"])
+        VoiceReminder(
+            event_id=UUID(item["event_id"]), message=item["message"],
+            created_at=item["created_at"], kind=item.get("kind") or "reminder",
+        )
         for item in repository.take_voice_reminders()
     ]
 

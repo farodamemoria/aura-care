@@ -246,8 +246,9 @@ Zonas seguras:
 Ejercicios cognitivos:
 
 - `POST /v1/cognitive-exercises`, `GET /v1/cognitive-exercises`,
-  `GET /v1/cognitive-exercises/summary`, `POST /v1/cognitive-exercises/{exercise_id}/answer`,
-  `POST /v1/cognitive-exercises/auto-daily`.
+`GET /v1/cognitive-exercises/summary`, `POST /v1/cognitive-exercises/{exercise_id}/answer`,
+`POST /v1/cognitive-exercises/{exercise_id}/response`,
+`POST /v1/cognitive-exercises/auto-daily`.
 
 Agenda:
 
