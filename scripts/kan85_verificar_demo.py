@@ -31,9 +31,9 @@ COMPROBACIONES = [
     {"id": "salud", "path": "/health", "tipo": "json", "descripcion": "Backend operativo (status ok)"},
     {"id": "version", "path": "/v1/version", "tipo": "json", "descripcion": "Funciones de la demo presentes"},
     {"id": "assetlinks", "path": "/.well-known/assetlinks.json", "tipo": "json", "descripcion": "TWA enlazada (a pantalla completa)"},
-    {"id": "apk-faro-familia", "path": "https://github.com/farodamemoria/faro-apks/releases/download/apk-2026-09-15/com.faro.familia-base.apk", "tipo": "archivo", "descripcion": "Descarga Faro Familia"},
-    {"id": "apk-camera-access", "path": "https://github.com/farodamemoria/faro-apks/releases/download/voz-2026-09-15/camera-access-voz.apk", "tipo": "archivo", "descripcion": "Descarga App gafas (Camera Access)"},
-    {"id": "apk-faro-movil", "path": "https://github.com/farodamemoria/faro-apks/releases/download/apk-2026-09-15/com.faro.memoria.mobile-base.apk", "tipo": "archivo", "descripcion": "Descarga Faro Movil"},
+    {"id": "apk-faro-familia", "path": "/download/faro-familia.apk", "tipo": "archivo", "descripcion": "Descarga Faro Familia"},
+    {"id": "apk-camera-access", "path": "/download/camera-access.apk", "tipo": "archivo", "descripcion": "Descarga App gafas (Camera Access)"},
+    {"id": "apk-faro-movil", "path": "/download/faro-movil.apk", "tipo": "archivo", "descripcion": "Descarga Faro Movil"},
 ]
 
 
