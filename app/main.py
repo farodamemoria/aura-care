@@ -392,7 +392,7 @@ class FaceCandidate(BaseModel):
 
 
 class RecognitionResult(BaseModel):
-    status: str = Field(pattern="^(confirmed|unknown|review_required|rate_limited)$")
+    status: str = Field(pattern="^(confirmed|known|unknown|review_required|rate_limited)$")
     person: Optional[Person] = None
     confidence: Optional[float] = None
     review_id: Optional[UUID] = None
@@ -4718,7 +4718,10 @@ def recognize(request: Request, files: Annotated[list[UploadFile], File()], auth
     if person_id is not None and person_id in repository.people:
         key = f"{actor}:person:{person_id}"
         if repository.last_outcome.get(key, datetime.min.replace(tzinfo=timezone.utc)) > now() - SAME_PERSON_COOLDOWN:
-            return RecognitionResult(status="unknown", reason="Repeated announcement suppressed")
+            return RecognitionResult(
+                status="known", person=repository.people[person_id], confidence=confidence,
+                reason="Repeated announcement suppressed",
+            )
         repository.last_outcome[key] = now()
         return RecognitionResult(status="confirmed", person=repository.people[person_id], confidence=confidence, reason=reason)
     patient_frames = sum(1 for candidate in candidates if candidate.person_id == PATIENT_FACE_ID and candidate.confidence >= CONFIDENCE_MINIMUM)

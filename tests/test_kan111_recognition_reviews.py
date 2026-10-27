@@ -105,7 +105,9 @@ def test_known_person_with_consensus_is_confirmed(client: TestClient) -> None:
 def test_known_person_is_announced_again_after_cooldown(client: TestClient) -> None:
     main.face_provider = ScriptedProvider([[_match(99.0)]])
     assert client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()["status"] == "confirmed"
-    assert client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()["status"] == "unknown"
+    repeated = client.post("/v1/recognitions", headers=HEADERS, files=_files()).json()
+    assert repeated["status"] == "known"
+    assert repeated["person"]["display_name"] == "Ana"
     main.repository.last_outcome = {
         key: value - main.SAME_PERSON_COOLDOWN - main.timedelta(minutes=1)
         for key, value in main.repository.last_outcome.items()
