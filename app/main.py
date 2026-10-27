@@ -3041,29 +3041,36 @@ def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(defa
         repository.cognitive_exercises.pop(demo_id, None)
     with repository.lock:
         repository.event_db.execute("DELETE FROM events WHERE summary = ?", ("Aviso de ejemplo (historial de demo)",))
+        repository.event_db.execute("DELETE FROM events WHERE summary = ?", ("Posible pérdida de memoria (demo)",))
         repository.event_db.commit()
     reference = now()
     exercises_created = 0
     alerts_created = 0
     for offset in range(days, -1, -1):
         day = reference - timedelta(days=offset)
-        base_probability = 0.45 + 0.40 * (1 - offset / days)
+        progress = 1.0 - (offset / max(days, 1))  # 0 = mas antiguo, 1 = hoy
+        accuracy = 0.88 - 0.50 * progress  # deterioro: 88% al principio -> 38% ahora
         categories = ("recall", "orientation", "naming", "movement", "movement")
-        for index in range(1 if offset % 3 else 2):
-            question, answer = DEMO_QUESTIONS[(offset + index) % len(DEMO_QUESTIONS)]
+        daily_count = 3 if offset % 2 == 0 else 2
+        for index in range(daily_count):
+            question, answer = DEMO_QUESTIONS[(offset * 3 + index) % len(DEMO_QUESTIONS)]
             category = categories[(offset + index) % len(categories)]
-            correct = ((offset * 37 + index * 53) % 100) < int(base_probability * 100)
+            seed_value = (offset * 37 + index * 53) % 100
+            correct = seed_value < int(accuracy * 100)
             moment = day.replace(hour=10 + index, minute=15, second=0, microsecond=0)
             exercise_id = uuid4()
             repository.cognitive_exercises[exercise_id] = CognitiveExercise(
                 id=exercise_id, memory_id=None, category=category, question=question,
                 expected_answer=answer, created_at=moment, status="completed", correct=correct,
                 answered_at=moment, scheduled_at=moment, asked_at=moment, notes="demo",
-                patient_answer=answer if correct else "No me acuerdo ahora mismo",
-                response_seconds=6 + int(14 * (offset / days)),
+                patient_answer=answer if correct else (
+                    "No me acuerdo ahora mismo" if progress > 0.55 else "Creo que no me acuerdo"
+                ),
+                response_seconds=int(5 + 22 * progress + (seed_value % 4)),
             )
             exercises_created += 1
-        if offset % 5 == 0:
+        abandoned_every = 2 if progress > 0.5 else 4
+        if offset % abandoned_every == 0:
             abandoned_at = day.replace(hour=18, minute=0, second=0, microsecond=0)
             abandoned_id = uuid4()
             repository.cognitive_exercises[abandoned_id] = CognitiveExercise(
@@ -3073,10 +3080,16 @@ def seed_demo_history(days: int = 45, authorization: Optional[str] = Header(defa
                 scheduled_at=abandoned_at, asked_at=abandoned_at, abandoned=True,
             )
             exercises_created += 1
-        if offset % 9 == 0:
+        if offset == 0 or (progress > 0.6 and offset % 2 == 0):
+            repository.add_event(EventCreate(
+                kind="episode", summary="Posible pérdida de memoria (demo)", source="glasses",
+                severity="attention", occurred_at=day.replace(hour=19, minute=30),
+            ))
+            alerts_created += 1
+        if offset % 12 == 0:
             repository.add_event(EventCreate(
                 kind="hazard", summary="Aviso de ejemplo (historial de demo)", source="glasses",
-                severity="urgent" if offset % 18 == 0 else "attention", occurred_at=day,
+                severity="attention", occurred_at=day,
             ))
             alerts_created += 1
     repository.save_cognitive_exercises()
