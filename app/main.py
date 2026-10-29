@@ -2339,10 +2339,12 @@ TWA_ASSET_LINKS = [{
         "namespace": "android_app",
         "package_name": os.getenv("AURA_TWA_PACKAGE", "com.farodamemoria.familia"),
         "sha256_cert_fingerprints": [
-            os.getenv(
+            item.strip()
+            for item in os.getenv(
                 "AURA_TWA_SHA256",
                 "82:F0:DB:14:BC:D0:14:22:7F:CE:49:4B:8E:A9:00:E6:03:C6:84:6B:E9:D4:0E:70:9E:A8:4F:63:D2:16:03:98",
-            )
+            ).split(",")
+            if item.strip()
         ],
     },
 }]
