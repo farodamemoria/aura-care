@@ -604,6 +604,7 @@ class CareContactCreate(BaseModel):
     alternate_phone_e164: Optional[str] = Field(default=None, pattern=r"^\+[1-9]\d{7,14}$")
     address: PostalAddress = Field(default_factory=PostalAddress)
     availability_notes: str = Field(default="", max_length=500)
+    preferred_channel: str = Field(default="whatsapp", pattern="^(whatsapp|sms|call)$")
 
 
 class CareContactUpdate(BaseModel):
@@ -617,6 +618,7 @@ class CareContactUpdate(BaseModel):
     alternate_phone_e164: Optional[str] = Field(default=None, pattern=r"^\+[1-9]\d{7,14}$")
     address: Optional[PostalAddress] = None
     availability_notes: Optional[str] = Field(default=None, max_length=500)
+    preferred_channel: Optional[str] = Field(default=None, pattern="^(whatsapp|sms|call)$")
 
 
 class CareContact(CareContactCreate):
@@ -637,6 +639,8 @@ class CaredPersonProfile(BaseModel):
     profile_photo_available: bool = False
     phone_e164: Optional[str] = Field(default=None, pattern=r"^\+[1-9]\d{7,14}$")
     home_address: PostalAddress = Field(default_factory=PostalAddress)
+    address_verified_at: Optional[datetime] = None
+    safe_points: list[PostalAddress] = Field(default_factory=list, max_length=10)
 
 
 class LocationQuestion(BaseModel):
