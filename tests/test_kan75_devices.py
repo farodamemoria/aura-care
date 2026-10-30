@@ -15,13 +15,14 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "kan75-token"
+TOKEN = "kan75-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     monkeypatch.setenv("AURA_LOCAL_TOKEN", TOKEN)
+    monkeypatch.setenv("AURA_CREDENTIAL_PEPPER", "test-pepper")
     monkeypatch.setenv("AURA_EVENT_DB", str(tmp_path / "events.db"))
     monkeypatch.setenv("AURA_DATA_FILE", str(tmp_path / "state.json"))
     monkeypatch.setenv("AURA_REVIEW_MEDIA_DIR", str(tmp_path / "review-images"))

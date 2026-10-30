@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "kan121-token"
+TOKEN = "kan121-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 DAY = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
 

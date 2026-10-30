@@ -50,6 +50,23 @@ EMERGENCY_ALERT_COOLDOWN = timedelta(seconds=int(os.getenv("AURA_EMERGENCY_ALERT
 REVIEW_IMAGE_TTL = timedelta(hours=24)
 REVIEW_IMAGE_SUFFIX = ".bin"
 
+LEGACY_DEVELOPMENT_TOKEN_HASHES = frozenset({
+    "ed20191044553dac8f9c45e62062dd18e7dc1f898a897240b4179fb84fea3db4",
+    "e2186dbdb1bb4193608605e84f33208765b5693b55edd4f730a719a100eeea6f",
+    "057ba03d6c44104863dc7361fe4578965d1887360f90a0895882e58a6248fc86",
+    "10851c1922ff849d81d7fd31dab44cfdef27eb9ba4bbef6fc60a3f4d3245d3c4",
+    "c91cbbedf8c712e8e2b7517ddeca8fe4fde839ebd8339e0b2001363002b37712",
+    "138d55e9c73aa830bff6f7280e9ff202c139a8318fbf9cec8f40d602f06affab",
+    "c8d60a476c2ff5dbf006d072b1b22aa24d857be42079ff241ed0e0859b845f97",
+    "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b",
+    "4c5dc9b7708905f77f5e5d16316b5dfb425e68cb326dcd55a860e90a7707031e",
+    "3c469e9d6c5875d37a43f353d4f88e61fcf812c66eee3457465a40b0da4153e0",
+})
+BOOTSTRAP_TOKEN_MIN_LENGTH = 24
+SESSION_TOKEN_PREFIX = "faro1"
+SESSION_SECRET_MIN_LENGTH = 32
+SESSION_DEFAULT_TTL_SECONDS = 3600
+
 
 def review_cipher() -> Fernet:
     """Cifra en reposo la evidencia visual de las revisiones (Fernet = AES + HMAC)."""
@@ -873,6 +890,20 @@ class DeviceCredentialStatus(BaseModel):
     active: bool
     care_circle_id: str
     role: str
+
+
+class SessionTokenRequest(BaseModel):
+    role: str = Field(default="family", pattern="^(family|caregiver|clinician|patient)$")
+    subject: str = Field(default="family-user", min_length=1, max_length=120)
+    ttl_seconds: int = Field(default=SESSION_DEFAULT_TTL_SECONDS, ge=60, le=86400)
+    care_circle_id: Optional[str] = None
+
+
+class SessionTokenResponse(BaseModel):
+    token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    care_circle_id: str
 
 
 class DeviceInventoryItem(BaseModel):
@@ -2109,24 +2140,126 @@ app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 API_VERSION = "2026-08-26-patient-self-recognition-v1"
 
 
+def configured_care_circle_id() -> str:
+    """Identidad de circulo familiar activa en esta instancia (aislamiento entre familias)."""
+    value = (os.getenv("AURA_CARE_CIRCLE_ID") or "").strip()
+    return value or "local-care-circle"
+
+
+def is_development_token(value: str) -> bool:
+    normalized = (value or "").strip().casefold()
+    if not normalized:
+        return False
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest() in LEGACY_DEVELOPMENT_TOKEN_HASHES
+
+
+def configured_local_token() -> str:
+    """Token de arranque del portal. Sin valor por defecto y sin tokens de desarrollo conocidos."""
+    token = (os.getenv("AURA_LOCAL_TOKEN") or "").strip()
+    if not token or is_development_token(token) or len(token) < BOOTSTRAP_TOKEN_MIN_LENGTH:
+        raise HTTPException(status_code=503, detail="Authentication is not securely configured")
+    return token
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    try:
+        return base64.urlsafe_b64decode(value + padding)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid session token")
+
+
+def session_signing_secret() -> bytes:
+    secret = (os.getenv("AURA_SESSION_SECRET") or os.getenv("AURA_CREDENTIAL_PEPPER") or "").strip()
+    if len(secret) < SESSION_SECRET_MIN_LENGTH:
+        raise HTTPException(status_code=503, detail="Session signing is not configured")
+    return secret.encode("utf-8")
+
+
+def issue_session_token(
+    care_circle_id: str,
+    role: str = "family",
+    subject: str = "family-user",
+    ttl_seconds: int = SESSION_DEFAULT_TTL_SECONDS,
+) -> tuple[str, int]:
+    """Emite un token firmado (HMAC-SHA256) por usuario y circulo familiar, con caducidad."""
+    issued_at = int(datetime.now(timezone.utc).timestamp())
+    payload = {
+        "cid": care_circle_id,
+        "role": role,
+        "sub": subject,
+        "iat": issued_at,
+        "exp": issued_at + ttl_seconds,
+        "ver": 1,
+    }
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signing_input = f"{SESSION_TOKEN_PREFIX}.{body}"
+    signature = hmac.new(session_signing_secret(), signing_input.encode("utf-8"), hashlib.sha256).digest()
+    return f"{signing_input}.{_b64url_encode(signature)}", ttl_seconds
+
+
+def verify_session_token(credential: str) -> dict:
+    parts = credential.split(".")
+    if len(parts) != 3 or parts[0] != SESSION_TOKEN_PREFIX:
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    signing_input = f"{parts[0]}.{parts[1]}"
+    expected = hmac.new(session_signing_secret(), signing_input.encode("utf-8"), hashlib.sha256).digest()
+    if not hmac.compare_digest(expected, _b64url_decode(parts[2])):
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    try:
+        claims = json.loads(_b64url_decode(parts[1]))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    if not isinstance(claims, dict):
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    expires_at = claims.get("exp")
+    if not isinstance(expires_at, int) or expires_at < int(datetime.now(timezone.utc).timestamp()):
+        raise HTTPException(status_code=401, detail="Session token expired")
+    care_circle_id = claims.get("cid")
+    if not isinstance(care_circle_id, str) or not care_circle_id.strip():
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    if care_circle_id != configured_care_circle_id():
+        raise HTTPException(status_code=403, detail="Session belongs to another care circle")
+    return claims
+
+
 def require_auth(authorization: Optional[str]) -> str:
-    configured_token = os.getenv("AURA_LOCAL_TOKEN")
-    if not configured_token:
-        raise HTTPException(status_code=503, detail="Authentication is not configured")
+    """Identidad valida: token de arranque rotado o sesion firmada por circulo familiar."""
+    configured_token = configured_local_token()
+    scheme, separator, credential = (authorization or "").partition(" ")
+    if separator != " " or scheme.casefold() != "bearer" or not credential:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if is_development_token(credential):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if hmac.compare_digest(credential, configured_token):
+        return configured_care_circle_id()
+    if credential.startswith(SESSION_TOKEN_PREFIX + "."):
+        return verify_session_token(credential)["cid"]
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+def require_bootstrap_auth(authorization: Optional[str]) -> str:
+    """Solo el token de arranque rotado puede emitir sesiones por usuario."""
+    configured_token = configured_local_token()
     scheme, separator, credential = (authorization or "").partition(" ")
     if (
         separator != " "
         or scheme.casefold() != "bearer"
         or not credential
+        or is_development_token(credential)
         or not hmac.compare_digest(credential, configured_token)
     ):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return "local-care-circle"
+        raise HTTPException(status_code=401, detail="Bootstrap authentication required")
+    return configured_care_circle_id()
 
 
 def credential_hash(secret: str) -> str:
     """Hash bearer material with a server-side pepper; plaintext is never persisted."""
-    pepper = os.getenv("AURA_CREDENTIAL_PEPPER") or os.getenv("AURA_LOCAL_TOKEN")
+    pepper = os.getenv("AURA_CREDENTIAL_PEPPER")
     if not pepper:
         raise HTTPException(status_code=503, detail="Credential hashing is not configured")
     return hmac.new(pepper.encode("utf-8"), secret.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -2577,6 +2710,8 @@ def require_auth_or_device(authorization: Optional[str]) -> str:
         if error.status_code not in (401, 503):
             raise
     status = validate_device_credential(authorization)
+    if status.care_circle_id != configured_care_circle_id():
+        raise HTTPException(status_code=403, detail="Device belongs to another care circle")
     return status.care_circle_id
 
 
@@ -4426,6 +4561,22 @@ def family_speech(
     return Response(content=cached, media_type="audio/mpeg")
 
 
+@app.post("/v1/auth/session", response_model=SessionTokenResponse, status_code=201)
+def create_session_token(
+    request: SessionTokenRequest, authorization: Optional[str] = Header(default=None),
+) -> SessionTokenResponse:
+    """Emite una sesion firmada por usuario y circulo familiar (sustituye al token de desarrollo)."""
+    care_circle_id = require_bootstrap_auth(authorization)
+    if request.care_circle_id and request.care_circle_id != care_circle_id:
+        raise HTTPException(status_code=403, detail="Care circle mismatch")
+    token, expires_in = issue_session_token(
+        care_circle_id, request.role, request.subject.strip(), request.ttl_seconds,
+    )
+    return SessionTokenResponse(
+        token=token, expires_in=expires_in, care_circle_id=care_circle_id,
+    )
+
+
 @app.post("/v1/pairing-invites", response_model=PairingInvite, status_code=201)
 def create_pairing_invite(request: PairingInviteCreate, authorization: Optional[str] = Header(default=None)) -> PairingInvite:
     actor = require_auth(authorization)
@@ -4650,6 +4801,8 @@ def validate_device_credential(authorization: Optional[str] = Header(default=Non
     ).fetchone()
     if credential is None:
         raise HTTPException(status_code=401, detail="Invalid device credential")
+    if credential["care_circle_id"] != configured_care_circle_id():
+        raise HTTPException(status_code=403, detail="Device belongs to another care circle")
     return DeviceCredentialStatus(
         active=True, care_circle_id=credential["care_circle_id"], role=credential["role"],
     )

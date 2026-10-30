@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "integration-family-speech-token"
+TOKEN = "integration-family-speech-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 FAKE_MP3 = b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\xff" * 32
 

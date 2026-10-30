@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "people-enroll-token"
+TOKEN = "people-enroll-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 JPEG = b"\xff\xd8\xff\xe0" + b"FACE-JPEG" * 8 + b"\xff\xd9"
 PERSON_ID = main.UUID("22222222-2222-4222-8222-222222222222")

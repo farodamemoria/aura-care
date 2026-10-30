@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "integration-medication-token"
+TOKEN = "integration-medication-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 AT_0830 = "2026-09-15T08:30:00+02:00"
 AT_0900 = "2026-09-15T09:00:00+02:00"
