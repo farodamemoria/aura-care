@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "integration-cognition-token"
+TOKEN = "integration-cognition-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 UNKNOWN = "00000000-0000-4000-8000-000000000000"
 

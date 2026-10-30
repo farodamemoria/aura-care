@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "integration-safezone-token"
+TOKEN = "integration-safezone-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 ZONE = {"name": "Casa", "latitude": 42.2406, "longitude": -8.7207, "radius_meters": 150.0}

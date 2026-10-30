@@ -263,6 +263,10 @@ Conversación familiar:
 
 - `POST /v1/family/ask`, `POST /v1/family/speech`.
 
+Sesiones por usuario (KAN-31):
+
+- `POST /v1/auth/session`.
+
 Emparejamiento y dispositivos:
 
 - `POST /v1/pairing-invites`, `POST /v1/pairing/claim`,
@@ -291,7 +295,7 @@ Escucha ambiental:
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v56`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v57`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.

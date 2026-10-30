@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 
 import app.main as main  # noqa: E402
 
-TOKEN = "integration-agenda-token"
+TOKEN = "integration-agenda-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 INICIO = "2026-09-20T18:30:00+02:00"
 NUEVA = "2026-09-21T09:00:00+02:00"

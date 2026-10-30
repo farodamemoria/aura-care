@@ -1,7 +1,10 @@
 const urlToken = new URLSearchParams(location.search).get('token');
-if (urlToken) localStorage.setItem('auraToken', urlToken.trim());
-const token = localStorage.getItem('auraToken') || 'local-development-only';
-const authHeaders = {Authorization: `Bearer ${token}`};
+if (urlToken) {
+  localStorage.setItem('auraToken', urlToken.trim());
+  history.replaceState(null, '', location.pathname + location.hash);
+}
+const token = (localStorage.getItem('auraToken') || '').trim();
+const authHeaders = token ? {Authorization: `Bearer ${token}`} : {};
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/assets/sw.js');
 
 async function api(path, options = {}) {
@@ -1284,6 +1287,11 @@ if (agendaRecurrence && agendaWeekdays) {
 }
 
 (async function boot() {
+  if (!token) {
+    document.querySelector('#connection').textContent = 'Acceso no autorizado';
+    notify(new Error('Falta el enlace de acceso. Abre el portal con un enlace válido (?token=...).'));
+    return;
+  }
   try {
     const health = await fetch('/health').then(response => response.json());
     document.querySelector('#connection').textContent = `Conectado · ${health.face_provider === 'RekognitionFaceProvider' ? 'reconocimiento activo' : 'modo de prueba'}`;

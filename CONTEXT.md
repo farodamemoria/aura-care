@@ -89,7 +89,7 @@ Componentes del producto:
 - **KAN-80** — "Faro Familia puede hablar" → **En revisión** (implementado; pendiente validar por el PO).
 - **KAN-87** — Investigación del chat/WhatsApp + solución → **En revisión**.
 - **KAN-89** — Publicar la app de Meta en **Live** + verificación de empresa (WhatsApp producción) → **Por hacer**.
-- **KAN-31** — Cerrar autenticación pública de desarrollo y rotar credenciales expuestas (incluye la clave de OpenAI) → pendiente.
+- **KAN-31** — Cerrar autenticación pública de desarrollo y rotar credenciales expuestas → cerrado (auth rotada, sesiones por círculo y verificación externa; ver \docs/kan31-cierre-auth.md\).
 - Resto de tareas del proyecto: ver tablero KAN.
 
 ### Funcionalidades entregadas (KAN-80)
@@ -105,7 +105,7 @@ Componentes del producto:
 ### Pendientes
 - Validar las 5 pruebas del chat: (1) resumen, (2) despedida apaga el micro, (3) rechaza informes, (4) rechaza temas ajenos (chistes), (5) registra el aviso.
 - Publicar la app de Meta en **Live** + verificación de empresa (**KAN-89**).
-- **Rotar la clave de OpenAI** expuesta (**KAN-31**).
+- **Rotar la clave de OpenAI** expuesta (incidencia de proveedor independiente; KAN-6).
 - Subir el proyecto **TWA** a GitHub (sin el keystore).
 
 ---
@@ -114,7 +114,7 @@ Componentes del producto:
 
 - **FastAPI** "AURA Care" v0.2.0 (`app/main.py`), servido con uvicorn en `0.0.0.0:8082`.
 - **Persistencia:** SQLite (`faro-events.db`) + ficheros (fotos en `person-photos/`; evidencia de revisiones cifrada en `review-images/`).
-- **Auth:** cabecera `Authorization: Bearer <AURA_LOCAL_TOKEN>` (token configurado en el servidor; sin valor por defecto: si falta, el fallo es cerrado). Objetivo producción: JWT de Cognito validado por API Gateway.
+- **Auth (KAN-31):** `Authorization: Bearer <token>`. Sin valor por defecto: exige `AURA_LOCAL_TOKEN` rotado (mínimo 24 caracteres) o una sesión firmada por usuario y círculo familiar (`POST /v1/auth/session`, HMAC-SHA256 con `AURA_SESSION_SECRET`), con caducidad y aislamiento entre familias. Sin configuración segura el fallo es cerrado (503).
 - **Zona horaria** del "día" del paciente: `Europe/Madrid` (`AURA_FAMILY_TIMEZONE`).
 - **Idiomas** del chat: es/gl/en (`AURA_FAMILY_LANGUAGE`, por defecto `es`).
 

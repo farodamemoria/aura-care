@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 import app.main as main  # noqa: E402
 from app.environmental_listening import is_lost_request  # noqa: E402
 
-TOKEN = "voice-intent-token"
+TOKEN = "voice-intent-token-5f3c9a7e1b6d8042c4e8a9f0d2b7c6"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 WAV = b"RIFF" + b"\x00" * 40 + b"PCM-AUDIO" * 8
 
