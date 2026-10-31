@@ -247,3 +247,39 @@ def test_portal_muestra_campos_de_contacto_y_puntos_seguros(client: TestClient) 
     assert script.status_code == 200
     assert "safe_points: safePoints" in script.text
     assert "emergency_share_scope" in script.text
+
+def _alert_payload_for(contact, alert) -> str:
+    provider = main.MetaWhatsAppProvider("0", "token", "faro_emergency_alert")
+    payloads: list[dict] = []
+
+    def fake_post(payload: bytes) -> dict:
+        payloads.append(json.loads(payload))
+        return {"messages": [{"id": "wamid-kan60"}]}
+
+    provider._post_json = fake_post  # type: ignore[assignment]
+    provider.send(contact, alert)
+    assert payloads
+    return json.dumps(payloads[0], ensure_ascii=False)
+
+
+def test_aviso_respeta_datos_autorizados_por_contacto(client: TestClient) -> None:
+    client.put("/v1/patient-profile", headers=HEADERS, json=_profile_payload())
+    base = {"display_name": "Bibiana", "phone_e164": "+34644610954", "whatsapp_consent": True, "priority": 1}
+    contacts = {
+        scope: main.CareContact(id=main.uuid4(), created_at=main.now(), emergency_share_scope=scope, **base)
+        for scope in ("full", "location", "basic")
+    }
+    lost = main.EmergencyAlertCreate(kind="lost", spoken_message="No sé dónde estoy", explicit_help_request=True)
+    full = _alert_payload_for(contacts["full"], lost)
+    basic = _alert_payload_for(contacts["basic"], lost)
+    assert "Domicilio del paciente" in full and "Lugar Soutelo" in full
+    assert "Lugar Soutelo" not in basic
+
+    located = main.EmergencyAlertCreate(
+        kind="lost", spoken_message="No sé dónde estoy", explicit_help_request=True,
+        latitude=42.2406, longitude=-8.7207,
+    )
+    location = _alert_payload_for(contacts["location"], located)
+    basic_located = _alert_payload_for(contacts["basic"], located)
+    assert "maps.google" in location and "Lugar Soutelo" not in location
+    assert "maps.google" not in basic_located and "Lugar Soutelo" not in basic_located

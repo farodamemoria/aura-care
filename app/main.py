@@ -1093,15 +1093,19 @@ class MetaWhatsAppProvider:
         return media_id
 
     def send(self, contact: CareContact, alert: EmergencyAlertCreate, image: Optional[bytes] = None) -> AlertDelivery:
+        # KAN-60: cada contacto recibe solo los datos que tiene autorizados.
+        scope = getattr(contact, "emergency_share_scope", "full")
         profile = repository.get_patient_profile()
         home = profile.home_address if profile is not None else None
         home_label = (home.label() if home else None) or None
-        message = build_alert_message(alert, home_label=home_label)
+        share_location = scope in ("full", "location")
+        share_home = scope == "full"
+        message = build_alert_message(alert, home_label=home_label if share_home else None)
         location = ""
-        if alert.latitude is not None and alert.longitude is not None:
+        if share_location and alert.latitude is not None and alert.longitude is not None:
             location = f" https://maps.google.com/?q={alert.latitude},{alert.longitude}"
         home_note = ""
-        if home_label and alert.latitude is None and alert.longitude is None and not alert.tracking_url:
+        if share_home and home_label and alert.latitude is None and alert.longitude is None and not alert.tracking_url:
             home_note = f" Domicilio del paciente: {home_label}."
         text_payload = json.dumps({
             "messaging_product": "whatsapp",
