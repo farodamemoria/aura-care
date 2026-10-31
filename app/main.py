@@ -622,6 +622,8 @@ class CareContactCreate(BaseModel):
     address: PostalAddress = Field(default_factory=PostalAddress)
     availability_notes: str = Field(default="", max_length=500)
     preferred_channel: str = Field(default="whatsapp", pattern="^(whatsapp|sms|call)$")
+    emergency_share_scope: str = Field(default="full", pattern="^(full|location|basic)$")
+    emergency_notes: str = Field(default="", max_length=500)
 
 
 class CareContactUpdate(BaseModel):
@@ -636,6 +638,8 @@ class CareContactUpdate(BaseModel):
     address: Optional[PostalAddress] = None
     availability_notes: Optional[str] = Field(default=None, max_length=500)
     preferred_channel: Optional[str] = Field(default=None, pattern="^(whatsapp|sms|call)$")
+    emergency_share_scope: Optional[str] = Field(default=None, pattern="^(full|location|basic)$")
+    emergency_notes: Optional[str] = Field(default=None, max_length=500)
 
 
 class CareContact(CareContactCreate):
@@ -726,7 +730,10 @@ def location_age_minutes(recorded_at: Optional[datetime], reference: Optional[da
     return max(0, int((reference - recorded_at).total_seconds() // 60))
 
 
-def build_alert_message(alert: EmergencyAlertCreate, reference: Optional[datetime] = None) -> str:
+def build_alert_message(
+    alert: EmergencyAlertCreate, reference: Optional[datetime] = None,
+    home_label: Optional[str] = None,
+) -> str:
     reference = reference or now()
     location = ""
     if alert.latitude is not None and alert.longitude is not None:
@@ -743,6 +750,8 @@ def build_alert_message(alert: EmergencyAlertCreate, reference: Optional[datetim
             location += f" ({alert.location_source})"
     if alert.tracking_url:
         location += f" Seguimiento: {alert.tracking_url}"
+    if not location and home_label:
+        location = f" Domicilio del paciente: {home_label}."
     return f"Alerta de Faro da Memoria. Tipo: {alert.kind}. {alert.spoken_message}{location}"
 
 
@@ -1084,10 +1093,16 @@ class MetaWhatsAppProvider:
         return media_id
 
     def send(self, contact: CareContact, alert: EmergencyAlertCreate, image: Optional[bytes] = None) -> AlertDelivery:
-        message = build_alert_message(alert)
+        profile = repository.get_patient_profile()
+        home = profile.home_address if profile is not None else None
+        home_label = (home.label() if home else None) or None
+        message = build_alert_message(alert, home_label=home_label)
         location = ""
         if alert.latitude is not None and alert.longitude is not None:
             location = f" https://maps.google.com/?q={alert.latitude},{alert.longitude}"
+        home_note = ""
+        if home_label and alert.latitude is None and alert.longitude is None and not alert.tracking_url:
+            home_note = f" Domicilio del paciente: {home_label}."
         text_payload = json.dumps({
             "messaging_product": "whatsapp",
             "to": contact.phone_e164.removeprefix("+"),
@@ -1103,7 +1118,7 @@ class MetaWhatsAppProvider:
                 "language": {"code": self.template_language},
                 "components": [{"type": "body", "parameters": [
                     {"type": "text", "text": alert.kind},
-                    {"type": "text", "text": alert.spoken_message + location},
+                    {"type": "text", "text": alert.spoken_message + location + home_note},
                 ]}],
             },
         }).encode("utf-8")
@@ -2552,7 +2567,7 @@ def list_care_contacts(authorization: Optional[str] = Header(default=None)) -> l
 
 @app.post("/v1/care-contacts", response_model=CareContact, status_code=201)
 def create_care_contact(request: CareContactCreate, authorization: Optional[str] = Header(default=None)) -> CareContact:
-    require_auth(authorization)
+    actor = require_auth(authorization)
     if not request.whatsapp_consent:
         raise HTTPException(status_code=422, detail="WhatsApp consent is required")
     if request.known_person_id is not None:
@@ -2565,7 +2580,11 @@ def create_care_contact(request: CareContactCreate, authorization: Optional[str]
     repository.save_care_contacts()
     repository.add_event(EventCreate(
         kind="caregiver_action", summary=f"{contact.display_name} añadido a la red de cuidados",
-        source="portal", metadata={"contact_id": str(contact.id), "role": contact.role},
+        source="portal", metadata={
+            "contact_id": str(contact.id), "role": contact.role, "actor": actor,
+            "preferred_channel": contact.preferred_channel,
+            "emergency_share_scope": contact.emergency_share_scope,
+        },
     ))
     return contact
 
@@ -2575,7 +2594,7 @@ def update_care_contact(
     contact_id: UUID, request: CareContactUpdate,
     authorization: Optional[str] = Header(default=None),
 ) -> CareContact:
-    require_auth(authorization)
+    actor = require_auth(authorization)
     contact = repository.care_contacts.get(contact_id)
     if contact is None:
         raise HTTPException(status_code=404, detail="Care contact not found")
@@ -2586,8 +2605,17 @@ def update_care_contact(
     if phone and any(existing.id != contact_id and existing.phone_e164 == phone for existing in repository.care_contacts.values()):
         raise HTTPException(status_code=409, detail="This phone is already in the care network")
     updated = CareContact.model_validate({**contact.model_dump(), **changes})
+    changed = [field for field, value in updated.model_dump().items() if contact.model_dump().get(field) != value]
     repository.care_contacts[contact_id] = updated
     repository.save_care_contacts()
+    if changed:
+        repository.add_event(EventCreate(
+            kind="caregiver_action", summary=f"Ficha de {updated.display_name} actualizada",
+            source="portal", metadata={
+                "contact_id": str(updated.id), "role": updated.role, "actor": actor,
+                "changed_fields": ",".join(sorted(changed)),
+            },
+        ))
     return updated
 
 
@@ -2628,11 +2656,36 @@ def get_patient_profile(authorization: Optional[str] = Header(default=None)) -> 
     return reconcile_patient_media(profile)
 
 
+def profile_changed_fields(previous: Optional[CaredPersonProfile], current: CaredPersonProfile) -> list[str]:
+    """KAN-60: campos de la ficha que han cambiado, para la auditoria."""
+    if previous is None:
+        return ["*"]
+    tracked = (
+        "preferred_name", "full_name", "birth_year", "phone_e164", "home_address", "safe_points",
+        "conditions", "communication_preferences", "emergency_notes", "care_notes",
+    )
+    before, after = previous.model_dump(), current.model_dump()
+    return [field for field in tracked if before.get(field) != after.get(field)]
+
+
+def verified_address_timestamp(
+    previous: Optional[CaredPersonProfile], current: CaredPersonProfile,
+) -> Optional[datetime]:
+    """KAN-60: fecha de verificacion del domicilio; se limpia si faltan coordenadas."""
+    address = current.home_address
+    if address.latitude is None or address.longitude is None:
+        return None
+    address_changed = previous is None or previous.home_address != address
+    if address_changed or current.address_verified_at is None:
+        return now()
+    return current.address_verified_at
+
+
 @app.put("/v1/patient-profile", response_model=CaredPersonProfile)
 def update_patient_profile(
     request: CaredPersonProfile, authorization: Optional[str] = Header(default=None),
 ) -> CaredPersonProfile:
-    require_auth(authorization)
+    actor = require_auth(authorization)
     current = repository.get_patient_profile()
     if current is not None:
         request = request.model_copy(update={
@@ -2640,10 +2693,21 @@ def update_patient_profile(
             "face_enrollment_complete": current.face_enrollment_complete,
             "profile_photo_available": current.profile_photo_available,
         })
+    request = request.model_copy(update={
+        "address_verified_at": verified_address_timestamp(current, request),
+    })
+    changed = profile_changed_fields(current, request)
     repository.save_patient_profile(request)
     repository.add_event(EventCreate(
         kind="caregiver_action", summary="Ficha del paciente actualizada", source="portal",
-        metadata={"patient_profile": True},
+        metadata={
+            "patient_profile": True,
+            "actor": actor,
+            "changed_fields": ",".join(changed),
+            "address_changed": "home_address" in changed,
+            "address_verified_at": (request.address_verified_at.isoformat()
+                                    if request.address_verified_at else None),
+        },
     ))
     return request
 
@@ -2930,6 +2994,10 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
                                            if request.location_recorded_at else None),
                   "recipients_attempted": len(contacts), "recipients_delivered": len(deliveries),
                   "recipient_roles": ",".join(contact.role for contact, _ in deliveries),
+                  "recipient_channels": ",".join(sorted({contact.preferred_channel for contact, _ in deliveries})),
+                  "recipient_share_scopes": ",".join(sorted({contact.emergency_share_scope for contact, _ in deliveries})),
+                  "patient_home_address": ((repository.get_patient_profile().home_address.label()
+                                            if repository.get_patient_profile() else "")),
                   "recipient_failures": len(failures)},
     ))
     return alert
