@@ -104,8 +104,10 @@ y momento, tanto con la IA como con la respuesta determinista de respaldo.
 `app/environmental_listening.py` es un motor determinista (sin diagnósticos) que, ante señales
 acústicas repetidas (tos, atragantamiento, caída, quejido, llanto, grito), hace **una sola**
 pregunta de comprobación y escala solo si hay petición de ayuda, persistencia o falta de respuesta.
+`app/acoustic_audio.py` convierte un WAV del micrófono en esas detecciones (decodificación PCM,
+enventanado, FFT y clasificación conservadora ante ruido continuo).
 Se expone por `POST /v1/acoustic-events`, `POST /v1/acoustic-events/response`,
-`POST /v1/acoustic-events/tick` y `GET /v1/acoustic-episodes`.
+`POST /v1/acoustic-events/tick`, `POST /v1/acoustic-audio` (cuerpo WAV) y `GET /v1/acoustic-episodes`.
 
 La app envía además segmentos de voz de las gafas a `POST /v1/voice/intent`: el backend los
 transcribe con IA y, si el paciente dice que se ha perdido o está desorientado (español o gallego),
@@ -289,7 +291,11 @@ Ayuda al familiar (KAN-73):
 Escucha ambiental:
 
 - `POST /v1/acoustic-events`, `POST /v1/acoustic-events/response`,
-  `POST /v1/acoustic-events/tick`, `GET /v1/acoustic-episodes`.
+  `POST /v1/acoustic-events/tick`, `POST /v1/acoustic-audio`, `GET /v1/acoustic-episodes`.
+
+Cámaras locales (KAN-178):
+
+- `POST /v1/camera-hazard`.
 
 ## 3. Portal Faro Familia (`aura-care/web`)
 

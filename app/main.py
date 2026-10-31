@@ -37,6 +37,12 @@ from .environmental_listening import (
     is_lost_request,
     normalize_text,
 )
+from .acoustic_audio import (
+    MAX_AUDIO_BYTES,
+    AudioFormatError,
+    analyze_wav,
+    feed_engine,
+)
 
 CONFIDENCE_MINIMUM = 95.0
 CONFIDENCE_MEAN_MINIMUM = 95.0
@@ -6160,4 +6166,46 @@ def list_acoustic_episodes(authorization: Optional[str] = Header(default=None)) 
     return {
         "active": active.snapshot() if active else None,
         "history": [episode.snapshot() for episode in reversed(acoustic_listening.history)],
+    }
+
+
+@app.post("/v1/acoustic-audio")
+async def analyze_acoustic_audio(
+    request: Request,
+    occurred_at: Optional[datetime] = None,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """Analyse a WAV chunk captured by the glasses and run the listening engine.
+
+    The body is the raw WAV file (PCM). Each detected acoustic event is fed to
+    the same engine used by ``/v1/acoustic-events`` so a single isolated sound
+    never alerts, while a repeated pattern asks once and escalates only when
+    appropriate.
+    """
+    require_auth(authorization)
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="audio vacío")
+    if len(data) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail="audio demasiado grande")
+    try:
+        events, duration, sample_rate = analyze_wav(data)
+    except AudioFormatError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    started_at = occurred_at or (now() - timedelta(seconds=duration))
+    outcomes = feed_engine(acoustic_listening, events, started_at)
+    applied = []
+    for event, outcome in zip(events, outcomes):
+        at = started_at + timedelta(seconds=event.offset_seconds)
+        applied.append({
+            "event": event.as_dict(),
+            "outcome": _apply_acoustic_outcome(outcome, at, event.signal),
+        })
+    return {
+        "sample_rate": sample_rate,
+        "duration_seconds": round(duration, 3),
+        "events": [event.as_dict() for event in events],
+        "results": applied,
     }
