@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -114,3 +115,135 @@ def test_varios_cuidadores_y_prioridad(client: TestClient) -> None:
     contacts = client.get("/v1/care-contacts", headers=HEADERS).json()
     names = [item["display_name"] for item in contacts]
     assert "Bibiana" in names and "José María" in names
+
+def test_cambio_de_domicilio_actualiza_verificacion_y_auditoria(client: TestClient) -> None:
+    first = client.put("/v1/patient-profile", headers=HEADERS, json=_profile_payload()).json()
+    assert first["address_verified_at"]
+    moved = _profile_payload(home_address={
+        "street_address": "Rúa Nova 9", "postal_code": "36679", "locality": "Cuntis",
+        "province": "Pontevedra", "country": "España",
+        "latitude": 42.6610, "longitude": -8.5690,
+    })
+    moved.pop("address_verified_at", None)
+    second = client.put("/v1/patient-profile", headers=HEADERS, json=moved).json()
+    assert second["home_address"]["street_address"] == "Rúa Nova 9"
+    assert second["address_verified_at"] and second["address_verified_at"] != first["address_verified_at"]
+    events = client.get("/v1/events", headers=HEADERS, params={"kind": "caregiver_action"}).json()
+    audit = [event for event in events if event["metadata"].get("patient_profile")]
+    assert audit, "debe registrarse la modificacion de la ficha"
+    latest = audit[0]
+    assert "home_address" in latest["metadata"]["changed_fields"]
+    assert latest["metadata"]["address_changed"] is True
+    assert latest["metadata"]["actor"]
+    assert latest["metadata"]["address_verified_at"]
+
+
+def test_quitar_coordenadas_limpia_la_verificacion(client: TestClient) -> None:
+    client.put("/v1/patient-profile", headers=HEADERS, json=_profile_payload())
+    without = _profile_payload(home_address={"street_address": "Sin coordenadas", "locality": "Cuntis"})
+    body = client.put("/v1/patient-profile", headers=HEADERS, json=without).json()
+    assert body["home_address"]["latitude"] is None
+    assert body["address_verified_at"] is None
+
+
+def test_puntos_seguros_limitados_a_diez(client: TestClient) -> None:
+    payload = _profile_payload(safe_points=[{"street_address": f"Punto seguro {index}"} for index in range(11)])
+    assert client.put("/v1/patient-profile", headers=HEADERS, json=payload).status_code == 422
+
+
+def test_alerta_usa_contactos_activos_y_datos_autorizados(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client.put("/v1/patient-profile", headers=HEADERS, json=_profile_payload())
+    client.post("/v1/care-contacts", headers=HEADERS, json={
+        "display_name": "Bibiana", "phone_e164": "+34644610954", "role": "family",
+        "whatsapp_consent": True, "priority": 1, "preferred_channel": "call",
+        "emergency_share_scope": "basic", "address": {"street_address": "Casa de Bibiana"},
+    })
+    client.post("/v1/care-contacts", headers=HEADERS, json={
+        "display_name": "José María", "phone_e164": "+34634443441", "role": "caregiver",
+        "whatsapp_consent": True, "priority": 2, "alerts_enabled": False,
+        "emergency_share_scope": "full",
+    })
+    captured: list = []
+
+    def fake_send(contacts, alert, image=None):  # noqa: ANN001
+        captured.extend(contacts)
+        return [(contact, main.AlertDelivery(message_id="wamid-kan60")) for contact in contacts], []
+
+    monkeypatch.setattr(main, "send_alert_to_contacts", fake_send)
+    response = client.post("/v1/emergency-alerts", headers=HEADERS, json={
+        "kind": "lost", "spoken_message": "No sé dónde estoy", "explicit_help_request": True,
+    })
+    assert response.status_code == 201, response.text
+    assert [contact.display_name for contact in captured] == ["Bibiana"]
+    events = client.get("/v1/events", headers=HEADERS, params={"kind": "location"}).json()
+    metadata = events[0]["metadata"]
+    assert metadata["recipient_channels"] == "call"
+    assert metadata["recipient_share_scopes"] == "basic"
+    assert "Lugar Soutelo" in metadata["patient_home_address"]
+    assert "Casa de Bibiana" not in metadata["patient_home_address"]
+
+
+def test_alerta_sin_gps_incluye_el_domicilio_del_paciente(client: TestClient) -> None:
+    client.put("/v1/patient-profile", headers=HEADERS, json=_profile_payload())
+    contact = next(iter(client.get("/v1/care-contacts", headers=HEADERS).json()), None)
+    if contact is None:
+        client.post("/v1/care-contacts", headers=HEADERS, json={
+            "display_name": "Bibiana", "phone_e164": "+34644610954",
+            "whatsapp_consent": True, "priority": 1,
+        })
+    stored = main.repository.care_contacts
+    contact_model = next(iter(stored.values()))
+    provider = main.MetaWhatsAppProvider("0", "token", "faro_emergency_alert")
+    payloads: list[dict] = []
+
+    def fake_post(payload: bytes) -> dict:
+        payloads.append(json.loads(payload))
+        return {"messages": [{"id": "wamid-kan60"}]}
+
+    provider._post_json = fake_post  # type: ignore[assignment]
+    alert = main.EmergencyAlertCreate(
+        kind="lost", spoken_message="No sé dónde estoy", explicit_help_request=True,
+    )
+    provider.send(contact_model, alert)
+    assert payloads, "el proveedor debe enviar el aviso"
+    body = json.dumps(payloads[0], ensure_ascii=False)
+    assert "Domicilio del paciente" in body
+    assert "Lugar Soutelo" in body
+    assert "Casa de Bibiana" not in body
+
+
+def test_registros_antiguos_sin_campos_nuevos_siguen_cargando() -> None:
+    legacy_contact = {
+        "id": "6f0a3a54-8e5c-4a3f-9c9f-2a1b3c4d5e6f",
+        "created_at": "2026-08-01T09:00:00Z",
+        "display_name": "José María", "phone_e164": "+34634443441",
+        "role": "caregiver", "whatsapp_consent": True,
+        "priority": 2, "alerts_enabled": True,
+    }
+    contact = main.CareContact.model_validate(legacy_contact)
+    assert contact.preferred_channel == "whatsapp"
+    assert contact.emergency_share_scope == "full"
+    assert contact.emergency_notes == ""
+    assert contact.address.street_address == ""
+
+    legacy_profile = main.CaredPersonProfile.model_validate({"preferred_name": "Viviana"})
+    assert legacy_profile.home_address.street_address == ""
+    assert legacy_profile.home_address.latitude is None
+    assert legacy_profile.safe_points == []
+    assert legacy_profile.address_verified_at is None
+
+
+def test_portal_muestra_campos_de_contacto_y_puntos_seguros(client: TestClient) -> None:
+    page = client.get("/")
+    assert page.status_code == 200
+    for marker in (
+        "Puntos seguros autorizados", 'name="home_safe_points"',
+        'name="preferred_channel"', 'name="emergency_share_scope"',
+    ):
+        assert marker in page.text
+    script = client.get("/assets/app.js?v=48")
+    assert script.status_code == 200
+    assert "safe_points: safePoints" in script.text
+    assert "emergency_share_scope" in script.text
