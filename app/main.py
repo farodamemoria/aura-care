@@ -401,6 +401,19 @@ class VoiceReminder(BaseModel):
     message: str
     created_at: datetime
     kind: str = "reminder"
+    id: Optional[UUID] = None
+
+
+class VoiceReminderAck(BaseModel):
+    ids: list[UUID] = Field(default_factory=list)
+
+
+class VoiceReminderClaim(BaseModel):
+    reminders: list[VoiceReminder] = Field(default_factory=list)
+    lease_seconds: int = 90
+
+
+VOICE_REMINDER_LEASE_SECONDS = 90
 
 
 class CalendarTickResult(BaseModel):
@@ -1359,6 +1372,9 @@ class InMemoryRepository:
         voice_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(voice_reminders)").fetchall()}
         if "kind" not in voice_columns:
             self.event_db.execute("ALTER TABLE voice_reminders ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'")
+        if "claimed_until" not in voice_columns:
+            # KAN-195: reserva temporal (peek+lease) para no consumir lo que no se llega a decir.
+            self.event_db.execute("ALTER TABLE voice_reminders ADD COLUMN claimed_until TEXT")
         calendar_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(calendar_events)").fetchall()}
         for column, statement in (
             ("recurrence", "ALTER TABLE calendar_events ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'"),
@@ -1769,37 +1785,79 @@ class InMemoryRepository:
             )
             self.event_db.commit()
 
-    def take_voice_reminders(self) -> list[dict]:
-        stamp = None
-        rows: list = []
+    def _pending_voice_reminder_rows(self, limit: int) -> list:
+        reference = now().isoformat()
+        return self.event_db.execute(
+            "SELECT id, event_id, message, created_at, kind FROM voice_reminders "
+            "WHERE spoken_at IS NULL AND (claimed_until IS NULL OR claimed_until <= ?) "
+            "ORDER BY created_at ASC LIMIT ?",
+            (reference, limit),
+        ).fetchall()
+
+    def _mark_voice_reminders_delivered(self, ids: list[str]) -> int:
+        """KAN-195: solo aqui se marca hablado (tras confirmar la reproduccion)."""
+        if not ids:
+            return 0
+        stamp = now()
+        placeholders = ",".join("?" for _ in ids)
         with self.lock:
             rows = self.event_db.execute(
-                "SELECT id, event_id, message, created_at, kind FROM voice_reminders "
-                "WHERE spoken_at IS NULL ORDER BY created_at ASC LIMIT 20"
+                f"SELECT id, event_id FROM voice_reminders WHERE id IN ({placeholders})",
+                ids,
             ).fetchall()
-            if rows:
-                stamp = now()
-                self.event_db.executemany(
-                    "UPDATE voice_reminders SET spoken_at=? WHERE id=?",
-                    [(stamp.isoformat(), row["id"]) for row in rows],
-                )
-                self.event_db.commit()
+            cursor = self.event_db.execute(
+                f"UPDATE voice_reminders SET spoken_at=?, claimed_until=NULL "
+                f"WHERE id IN ({placeholders}) AND spoken_at IS NULL",
+                (stamp.isoformat(), *ids),
+            )
+            self.event_db.commit()
+            changed = cursor.rowcount or 0
         delivered = 0
-        if rows and stamp is not None:
-            for row in rows:
-                try:
-                    exercise_id = UUID(str(row["event_id"]))
-                except (ValueError, TypeError):
-                    continue
-                exercise = self.cognitive_exercises.get(exercise_id)
-                if exercise is not None and exercise.asked_at is None:
-                    self.cognitive_exercises[exercise.id] = exercise.model_copy(
-                        update={"asked_at": stamp}
-                    )
-                    delivered += 1
+        for row in rows:
+            try:
+                exercise_id = UUID(str(row["event_id"]))
+            except (ValueError, TypeError):
+                continue
+            exercise = self.cognitive_exercises.get(exercise_id)
+            if exercise is not None and exercise.asked_at is None:
+                self.cognitive_exercises[exercise.id] = exercise.model_copy(
+                    update={"asked_at": stamp}
+                )
+                delivered += 1
         if delivered:
             self.save_cognitive_exercises()
+        return changed
+
+    def peek_voice_reminders(self, limit: int = 20) -> list[dict]:
+        """KAN-195: devuelve los pendientes sin consumirlos (respeta reservas vivas)."""
+        with self.lock:
+            rows = self._pending_voice_reminder_rows(limit)
         return [dict(row) for row in rows]
+
+    def claim_voice_reminders(self, limit: int = 20) -> list[dict]:
+        """KAN-195: peek+lease atomico. Reserva sin marcar hablado; si no hay ack, vuelve a la cola."""
+        reference = now()
+        claimed_until = (reference + timedelta(seconds=VOICE_REMINDER_LEASE_SECONDS)).isoformat()
+        with self.lock:
+            rows = self._pending_voice_reminder_rows(limit)
+            if rows:
+                self.event_db.executemany(
+                    "UPDATE voice_reminders SET claimed_until=? WHERE id=?",
+                    [(claimed_until, row["id"]) for row in rows],
+                )
+                self.event_db.commit()
+        return [dict(row) for row in rows]
+
+    def ack_voice_reminders(self, ids: list[str]) -> int:
+        """KAN-195: confirma la entrega real de los recordatorios indicados."""
+        return self._mark_voice_reminders_delivered(ids)
+
+    def take_voice_reminders(self) -> list[dict]:
+        """Compatibilidad KAN-158: entrega y marca en el mismo paso (clientes antiguos)."""
+        rows = self.claim_voice_reminders()
+        if rows:
+            self.ack_voice_reminders([str(row["id"]) for row in rows])
+        return rows
 
     def pending_voice_reminder_event_ids(self) -> set[str]:
         with self.lock:
@@ -1818,7 +1876,8 @@ class InMemoryRepository:
             if not rows:
                 return False
             self.event_db.execute(
-                "UPDATE voice_reminders SET spoken_at=NULL WHERE event_id=? AND spoken_at IS NOT NULL",
+                "UPDATE voice_reminders SET spoken_at=NULL, claimed_until=NULL "
+                "WHERE event_id=? AND spoken_at IS NOT NULL",
                 (str(event_id),),
             )
             self.event_db.commit()
@@ -6076,16 +6135,42 @@ def glasses_not_worn(authorization: Optional[str] = Header(default=None)) -> dic
     return {"status": "reminded"}
 
 
+def _voice_reminder_response(item: dict) -> VoiceReminder:
+    return VoiceReminder(
+        event_id=UUID(item["event_id"]), message=item["message"],
+        created_at=item["created_at"], kind=item.get("kind") or "reminder",
+        id=UUID(str(item["id"])) if item.get("id") else None,
+    )
+
+
 @app.get("/v1/voice-reminders", response_model=list[VoiceReminder])
-def list_voice_reminders(authorization: Optional[str] = Header(default=None)) -> list[VoiceReminder]:
+def list_voice_reminders(
+    peek: bool = False, authorization: Optional[str] = Header(default=None),
+) -> list[VoiceReminder]:
+    """KAN-195: `peek=1` devuelve sin consumir; sin peek mantiene el comportamiento KAN-158."""
     require_auth(authorization)
-    return [
-        VoiceReminder(
-            event_id=UUID(item["event_id"]), message=item["message"],
-            created_at=item["created_at"], kind=item.get("kind") or "reminder",
-        )
-        for item in repository.take_voice_reminders()
-    ]
+    items = repository.peek_voice_reminders() if peek else repository.take_voice_reminders()
+    return [_voice_reminder_response(item) for item in items]
+
+
+@app.post("/v1/voice-reminders/claim", response_model=VoiceReminderClaim)
+def claim_voice_reminders(authorization: Optional[str] = Header(default=None)) -> VoiceReminderClaim:
+    """KAN-195: reserva (peek+lease) sin marcar hablado; confirma despues con /ack."""
+    require_auth(authorization)
+    items = repository.claim_voice_reminders()
+    return VoiceReminderClaim(
+        reminders=[_voice_reminder_response(item) for item in items],
+        lease_seconds=VOICE_REMINDER_LEASE_SECONDS,
+    )
+
+
+@app.post("/v1/voice-reminders/ack")
+def ack_voice_reminders(
+    payload: VoiceReminderAck, authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """KAN-195: marca como hablado solo lo que se ha reproducido de verdad."""
+    require_auth(authorization)
+    return {"acked": repository.ack_voice_reminders([str(item) for item in payload.ids])}
 
 
 @app.post("/v1/voice-reminders/{event_id}/retry")

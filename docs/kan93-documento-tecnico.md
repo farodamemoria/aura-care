@@ -160,6 +160,14 @@ cuidados. El planificador interno (`AURA_TICK_SCHEDULER=1`) ejecuta los ticks pe
 chat familiar (`POST /v1/family/ask`) puede **crear recordatorios** con la herramienta
 `crear_recordatorio` a partir de una petición del familiar y responde sobre la «Agenda próxima» (KAN-97).
 
+**Entrega sin pérdidas (KAN-195).** La cola `voice_reminders` no se consume al leerla: el cliente
+hace *peek* (`GET /v1/voice-reminders?peek=1`) o una **reserva con caducidad**
+(`POST /v1/voice-reminders/claim`, lease de 90 s) y solo confirma la entrega real cuando el audio
+se ha reproducido entero (`POST /v1/voice-reminders/ack`). Si la sesión se corta o no hay cliente
+activo, la reserva caduca y el recordatorio vuelve a la cola. El pipeline de voz usa este flujo y
+cancela sus tareas de fondo al terminar la sesión, de modo que una sesión cerrada no puede
+consumir recordatorios.
+
 ### 2.9 Inventario de endpoints
 
 Portal y estáticos:
@@ -256,7 +264,8 @@ Agenda:
 
 - `POST /v1/calendar-events`, `GET /v1/calendar-events`,
   `PATCH /v1/calendar-events/{event_id}`, `DELETE /v1/calendar-events/{event_id}`,
-  `POST /v1/calendar-tick`, `GET /v1/voice-reminders`,
+  `POST /v1/calendar-tick`, `GET /v1/voice-reminders` (con `?peek=1` para mirar sin consumir),
+  `POST /v1/voice-reminders/claim`, `POST /v1/voice-reminders/ack`,
   `POST /v1/voice-reminders/{event_id}/retry`, `POST /v1/glasses/not-worn`.
 
 Conversación familiar:
