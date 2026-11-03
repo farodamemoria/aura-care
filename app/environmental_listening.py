@@ -89,6 +89,7 @@ class ListeningConfig:
     cooldown: timedelta = timedelta(minutes=10)
     response_timeout: timedelta = timedelta(seconds=15)
     max_retries: int = 1
+    immediate_signals: frozenset[str] = frozenset({"fall"})
 
 
 @dataclass
@@ -162,6 +163,10 @@ class EnvironmentalListeningEngine:
         if self._last_ended_at is not None and at - self._last_ended_at < self.config.cooldown:
             return {"action": "ignored", "reason": "cooldown"}
 
+        if signal in self.config.immediate_signals:
+            self._recent = []
+            return self._start_episode(signal, at, confidence, reason="immediate")
+
         self._recent = [item for item in self._recent if at - item.at <= self.config.window]
         self._recent.append(Detection(signal=signal, confidence=confidence, at=at))
         occurrences = sum(1 for item in self._recent if item.signal == signal)
@@ -201,7 +206,8 @@ class EnvironmentalListeningEngine:
             return {"action": "ask", "episode_id": str(episode.id), "question": CHECK_IN_QUESTION, "reason": "retry"}
         return self._escalate(episode, at, reason="no_response", explicit=False)
 
-    def _start_episode(self, signal: str, at: datetime, confidence: float) -> dict:
+    def _start_episode(self, signal: str, at: datetime, confidence: float,
+                       reason: str = "repetition") -> dict:
         self._recent = []
         episode = Episode(
             id=uuid4(), signal=signal, started_at=at, updated_at=at,
@@ -209,7 +215,7 @@ class EnvironmentalListeningEngine:
             status="awaiting_response", check_ins=1, question_asked_at=at,
         )
         self.active_episode = episode
-        return {"action": "ask", "episode_id": str(episode.id), "question": CHECK_IN_QUESTION, "reason": "repetition"}
+        return {"action": "ask", "episode_id": str(episode.id), "question": CHECK_IN_QUESTION, "reason": reason}
 
     def _escalate(self, episode: Episode, at: datetime, reason: str, explicit: bool) -> dict:
         episode.status = "escalated"
