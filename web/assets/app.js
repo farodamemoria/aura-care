@@ -86,8 +86,123 @@ function icon(name, size = 16) {
   return `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 }
 
+function renderCameraEye() {
+  const target = document.querySelector('#devices');
+  if (!target) return;
+  const card = document.createElement('article'); card.className = 'device-card';
+  const title = document.createElement('strong'); title.textContent = 'Ojo de Faro (cámara de casa)';
+  const state = document.createElement('p'); state.textContent = 'Comprobando la cámara…';
+  const recognition = document.createElement('p'); recognition.className = 'meta';
+  recognition.textContent = 'Pulsa «Ver ahora» para pedir una foto y reconocer lo que ve.';
+  const image = document.createElement('img');
+  image.alt = 'Última imagen del ojo de Faro'; image.hidden = true;
+  image.style.width = '100%'; image.style.borderRadius = '14px'; image.style.marginTop = '10px';
+  const actions = document.createElement('div'); actions.className = 'actions';
+  const shoot = document.createElement('button'); shoot.className = 'primary'; shoot.textContent = 'Ver ahora';
+  const hint = document.createElement('p'); hint.className = 'meta';
+  hint.textContent = 'Captura bajo demanda: la cámara solo se abre cuando la pides, no en bucle.';
+  let previewUrl = null;
+
+  const refresh = async () => {
+    const status = await api('/v1/camera/status');
+    const when = status.last_frame_at ? new Date(status.last_frame_at).toLocaleString() : 'sin imágenes todavía';
+    state.textContent = (status.online ? 'En línea' : 'Sin señal') + ' · última imagen: ' + when;
+    if (status.description) recognition.textContent = (status.hazard ? '⚠ ' : '') + status.description;
+    if (status.has_preview) {
+      const response = await fetch('/v1/camera/preview', {headers: authHeaders, cache: 'no-store'});
+      if (response.ok) {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = URL.createObjectURL(await response.blob());
+        image.src = previewUrl; image.hidden = false;
+      }
+    }
+    return status;
+  };
+
+  shoot.onclick = async () => {
+    shoot.disabled = true; shoot.textContent = 'Pidiendo foto…';
+    try {
+      const before = (await refresh()).last_frame_at;
+      await api('/v1/camera/capture', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({note: 'portal'})});
+      let received = false;
+      for (let attempt = 0; attempt < 20 && !received; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        const status = await refresh();
+        received = status.last_frame_at && status.last_frame_at !== before;
+      }
+      toast(received ? 'Imagen y reconocimiento recibidos.' : 'La cámara no respondió. Comprueba que el puente esté encendido.', received ? 'success' : 'error');
+    } catch (error) { notify(error); }
+    finally { shoot.disabled = false; shoot.textContent = 'Ver ahora'; }
+  };
+
+  actions.append(shoot);
+  card.append(title, state, recognition, actions, image, hint);
+  target.append(card);
+  refresh().catch(() => { state.textContent = 'No se pudo consultar la cámara.'; });
+}
+
+function renderPatrol(patrol, usage) {
+  const target = document.querySelector('#devices');
+  if (!target || !patrol) return;
+  const card = document.createElement('article'); card.className = 'device-card';
+  const title = document.createElement('strong'); title.textContent = 'Patrulla del ojo';
+  const state = document.createElement('p');
+  const minutes = Math.round((patrol.interval_seconds || 300) / 60);
+  state.textContent = (patrol.enabled ? 'Activa' : 'Apagada') + ' · ' + (patrol.sweep_degrees || 180) + '° · cada ' + minutes + ' min';
+  if (patrol.vertical) state.textContent += ' · vertical ' + (patrol.vertical_degrees || 60) + '°';
+  if (usage) state.textContent += ' · IA ' + usage.used + '/' + usage.budget + ' hoy';
+
+  const form = document.createElement('form'); form.className = 'form-grid';
+  const select = document.createElement('select');
+  [180, 260, 360].forEach(value => {
+    const option = document.createElement('option'); option.value = String(value); option.textContent = value + '°';
+    select.append(option);
+  });
+  select.value = String(patrol.sweep_degrees || 180);
+  const interval = document.createElement('input'); interval.type = 'number'; interval.min = '1'; interval.max = '60';
+  interval.value = String(minutes); interval.title = 'Intervalo entre pasadas (minutos)';
+  const budget = document.createElement('input'); budget.type = 'number'; budget.min = '50'; budget.max = '5000';
+  budget.value = String(patrol.daily_budget || 500); budget.title = 'Máximo de análisis de IA al día';
+  const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = Boolean(patrol.enabled);
+  const labelToggle = document.createElement('label'); labelToggle.className = 'check';
+  labelToggle.append(toggle, document.createTextNode(' Activar patrulla'));
+  const vertical = document.createElement('input'); vertical.type = 'checkbox'; vertical.checked = Boolean(patrol.vertical);
+  const labelVertical = document.createElement('label'); labelVertical.className = 'check';
+  labelVertical.append(vertical, document.createTextNode(' Búsqueda vertical'));
+  const verticalSelect = document.createElement('select');
+  [30, 60, 90].forEach(value => {
+    const option = document.createElement('option'); option.value = String(value); option.textContent = 'Vertical ' + value + '°';
+    verticalSelect.append(option);
+  });
+  verticalSelect.value = String(patrol.vertical_degrees || 60);
+  const button = document.createElement('button'); button.type = 'submit'; button.className = 'primary'; button.textContent = 'Guardar';
+  form.append(select, verticalSelect, interval, budget, labelToggle, labelVertical, button);
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    try {
+      await api('/v1/camera/patrol', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+        enabled: toggle.checked,
+        sweep_degrees: parseInt(select.value, 10),
+        step_degrees: 45,
+        interval_seconds: Math.max(30, parseInt(interval.value, 10) * 60),
+        daily_budget: Math.max(50, parseInt(budget.value, 10)),
+        tilt: typeof patrol.tilt === 'number' ? patrol.tilt : -0.4,
+        zone: patrol.zone || '',
+        vertical: vertical.checked,
+        vertical_degrees: parseInt(verticalSelect.value, 10),
+        vertical_step_degrees: 30,
+      })});
+      toast('Patrulla guardada.', 'success');
+      await load();
+    } catch (error) { notify(error); } finally { button.disabled = false; }
+  };
+  card.append(title, state, form);
+  target.append(card);
+}
+
 async function load() {
-  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos', 'transmisiones', 'panel longitudinal'];
+  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos', 'transmisiones', 'panel longitudinal', 'patrulla', 'uso de cámara'];
   const requests = [
     api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
     api('/v1/events?limit=500'), api('/v1/location-sessions/active'),
@@ -96,6 +211,8 @@ async function load() {
     api('/v1/devices'),
     api('/v1/live-views'),
     api('/v1/stats/longitudinal?days=30'),
+    api('/v1/camera/patrol'),
+    api('/v1/camera/usage'),
   ];
   const settled = await Promise.allSettled(requests);
   const failed = [];
@@ -118,6 +235,8 @@ async function load() {
   const devices = pick(10);
   const liveViews = pick(11) || [];
   const longitudinal = pick(12);
+  const patrol = pick(13) || {};
+  const cameraUsage = pick(14);
 
   const pending = reviews.filter(review => review.status === 'pending');
   document.querySelector('#people-count').textContent = people.length;
@@ -139,6 +258,8 @@ async function load() {
   if (patient) { fillPatient(patient); await renderPatientPhoto(patient); }
   renderCareContacts(contacts, people);
   renderDevices(devices, liveViews);
+  renderPatrol(patrol, cameraUsage);
+  renderCameraEye();
   populateKnownPersonOptions(people);
   renderPeople(people);
   await renderReviews(pending, people);
@@ -840,6 +961,24 @@ function renderDevices(inventory, liveViews) {
     target.append(card);
   });
 
+  const sectionTitle = text => {
+    const node = document.createElement('h3');
+    node.className = 'section-title';
+    node.textContent = text;
+    return node;
+  };
+  target.append(sectionTitle('Cámara (ojo)'));
+  (inventory.cameras || []).forEach(camera => {
+    const card = document.createElement('article'); card.className = 'device-card';
+    const title = document.createElement('strong'); title.textContent = camera.name;
+    const meta = document.createElement('p');
+    const state = camera.online ? 'En línea' : 'Sin señal';
+    const last = camera.last_frame_at ? ' · última imagen: ' + new Date(camera.last_frame_at).toLocaleString() : '';
+    meta.textContent = 'Cámara (ojo) · ' + (camera.location || 'Casa') + ' · ' + state + last;
+    card.append(title, meta);
+    target.append(card);
+  });
+  target.append(sectionTitle('Privacidad y consentimiento'));
   const consent = document.createElement('article'); consent.className = 'device-card';
   const consentTitle = document.createElement('strong'); consentTitle.textContent = 'Vídeo en directo';
   const consentText = document.createElement('p');
