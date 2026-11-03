@@ -26,7 +26,7 @@ import threading
 import logging
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -932,6 +932,15 @@ class SessionTokenResponse(BaseModel):
     care_circle_id: str
 
 
+class CameraInventoryItem(BaseModel):
+    id: str
+    name: str
+    kind: str = "camera"
+    location: str = "Casa"
+    online: bool = False
+    last_frame_at: Optional[datetime] = None
+
+
 class DeviceInventoryItem(BaseModel):
     id: str
     role: str
@@ -950,6 +959,7 @@ class DeviceInventory(BaseModel):
     sources: list[SourceActivity]
     video_consent: bool = False
     updated_at: datetime
+    cameras: list[CameraInventoryItem] = Field(default_factory=list)
 
 
 class VideoConsentUpdate(BaseModel):
@@ -1168,7 +1178,7 @@ class MetaWhatsAppProvider:
                 "messaging_product": "whatsapp",
                 "to": contact.phone_e164.removeprefix("+"),
                 "type": "image",
-                "image": {"id": media_id, "caption": "Imagen reciente capturada por las gafas para esta alerta de Faro."},
+                "image": {"id": media_id, "caption": "Imagen reciente capturada por Faro para esta alerta." + location},
             }).encode("utf-8"))
             photo_message_id = photo_result.get("messages", [{}])[0].get("id")
             return AlertDelivery(message_id=message_id, photo_message_id=photo_message_id, photo_status="sent", channel=channel, template_error=template_error)
@@ -1740,7 +1750,22 @@ class InMemoryRepository:
                 consent = bool(json.loads(consent_row[0]))
             except (TypeError, ValueError):
                 consent = False
-        return DeviceInventory(devices=devices, sources=sources, video_consent=consent, updated_at=now())
+        camera_name = (os.getenv("AURA_CAMERA_NAME") or "Ojo (camara Tapo)").strip() or "Ojo (camara Tapo)"
+        camera_location = (os.getenv("AURA_CAMERA_LOCATION") or "Casa").strip() or "Casa"
+        last_frame = _LAST_CAMERA_FRAME.get("at")
+        cameras = [
+            CameraInventoryItem(
+                id="tapo-camera-1",
+                name=camera_name,
+                location=camera_location,
+                online=last_frame is not None and (now() - last_frame) < timedelta(minutes=5),
+                last_frame_at=last_frame,
+            )
+        ]
+        return DeviceInventory(
+            devices=devices, sources=sources, video_consent=consent, updated_at=now(),
+            cameras=cameras,
+        )
 
     def update_event_metadata(self, event_id: UUID, extra: dict) -> None:
         with self.lock:
@@ -3849,6 +3874,555 @@ def record_protective_observation(
         family_alert_status=family_alert_status, photo_delivery_status=photo_delivery_status,
         location_included=location_included,
     )
+
+
+CAMERA_HAZARD_PROMPT = (
+    "Analiza la foto SOLO para detectar peligros claros: humo, fuego, cristales rotos, puerta de la casa abierta, "
+    "agua corriendo, una persona caída en el suelo o un golpe fuerte. Responde empezando "
+    "EXACTAMENTE por 'PELIGRO:' (y el tipo) si lo ves claro, o por 'OK:' si no ves ningún "
+    "peligro o la imagen no se distingue bien. Sé muy conservador: si la imagen muestra sobre todo techo, pared, "
+    "el encuadre está torcido, es de noche o no se ve completa la escena, responde OK (no concluyente). "
+    "Para decir que una puerta está abierta debe verse la puerta entera y el hueco de salida con claridad; "
+    "un marco o una esquina no cuentan."
+)
+CAMERA_HAZARD_COOLDOWN = timedelta(minutes=5)
+CAMERA_HAZARD_SPEECH = {
+    "dangerous_impact": (
+        "¿Te encuentras bien? Te he visto en el suelo. No te levantes deprisa; "
+        "estoy contigo y aviso a la familia para que te ayuden."
+    ),
+    "smoke_or_fire": (
+        "Veo humo o fuego cerca. Aléjate con calma y espera ayuda; "
+        "estoy avisando a la familia ahora mismo."
+    ),
+    "broken_glass": (
+        "Veo cristales rotos. No te acerques y no camines descalzo; "
+        "aviso a la familia para que lo recojan."
+    ),
+    "door_open": (
+        "He visto la puerta de casa abierta. Si vas a salir, avisa antes y llévate las gafas; "
+        "aviso a la familia por si te has marchado."
+    ),
+    "water_running": (
+        "Veo agua corriendo. No pasa nada, no te preocupes; "
+        "aviso a la familia para que lo revise."
+    ),
+}
+CAMERA_HAZARD_TYPOLOGY = {
+    "dangerous_impact": "una posible caída o golpe",
+    "smoke_or_fire": "posible fuego o humo",
+    "broken_glass": "posibles cristales rotos",
+    "door_open": "la puerta de casa abierta",
+    "water_running": "posible agua corriendo",
+}
+CAMERA_SCENE_PROMPT = (
+    "Eres el ojo de Faro, la cámara que cuida de una persona mayor en su casa. Describe en UNA "
+    "frase corta (máximo 200 caracteres) lo que se ve: cuántas personas hay y qué hacen, "
+    "mascotas, muebles u objetos relevantes. Si ves un peligro claro (humo, fuego, cristales "
+    "rotos, agua corriendo, una persona caída en el suelo o la puerta de casa abierta) empieza "
+    "EXACTAMENTE por 'PELIGRO: <tipo>.' y después la descripción. Si no hay peligro empieza por "
+    "'OK:'. No inventes nada que no se vea; si la imagen es confusa responde 'OK: no se distingue bien'."
+)
+CAMERA_CAPTURE_TTL = timedelta(seconds=120)
+_LAST_CAMERA_FRAME: dict[str, Optional[datetime]] = {"at": None}
+_camera_hazard_lock = Lock()
+_camera_hazard_last: dict[str, datetime] = {}
+_camera_eye_lock = Lock()
+_camera_eye: dict[str, object] = {
+    "image": None, "mime_type": "image/jpeg", "captured_at": None,
+    "description": None, "hazard": False, "kind": None, "evidence_key": None,
+    "request_id": None,
+}
+_camera_capture: dict[str, object] = {
+    "request_id": None, "requested_at": None, "fulfilled_at": None,
+}
+
+
+class CameraHazardCheck(BaseModel):
+    image_base64: str
+    mime_type: str = "image/jpeg"
+
+
+class CameraFrameUpload(BaseModel):
+    image_base64: str
+    mime_type: str = "image/jpeg"
+    request_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class CameraCaptureRequest(BaseModel):
+    note: str = Field(default="", max_length=120)
+
+
+def describe_camera_image(image_b64: str, mime_type: str, prompt: str) -> str:
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is missing")
+    primary = os.getenv("AURA_VISION_MODEL", "gemini-3.1-flash-lite")
+    models = [primary] + [
+        item.strip()
+        for item in os.getenv("AURA_VISION_FALLBACKS", "gemini-3-flash-preview").split(",")
+        if item.strip() and item.strip() != primary
+    ]
+    payload = json.dumps({
+        "contents": [{"parts": [
+            {"text": prompt},
+            {"inline_data": {"mime_type": mime_type, "data": image_b64}},
+        ]}],
+    }).encode("utf-8")
+    last_error: Optional[Exception] = None
+    for model in models:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={urllib.parse.quote(key)}"
+        )
+        request = urllib.request.Request(
+            url, data=payload, method="POST", headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                data = json.load(response)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
+            last_error = error
+            continue
+        candidates = data.get("candidates") or []
+        content = candidates[0].get("content") if candidates else None
+        parts = (content or {}).get("parts") or []
+        text = "".join(str(part.get("text", "")) for part in parts).strip()
+        if text:
+            return text
+    raise RuntimeError(f"Camera vision failed: {last_error}")
+
+
+def describe_camera_hazard(image_b64: str, mime_type: str) -> str:
+    return describe_camera_image(image_b64, mime_type, CAMERA_HAZARD_PROMPT)
+
+
+def describe_camera_scene(image_b64: str, mime_type: str) -> str:
+    return describe_camera_image(image_b64, mime_type, CAMERA_SCENE_PROMPT)
+
+
+def camera_scene_description(verdict: str) -> str:
+    """Quita el prefijo OK:/PELIGRO: para mostrar solo la descripción al familiar."""
+    text = verdict.strip()
+    for prefix in ("PELIGRO:", "OK:"):
+        if text.upper().startswith(prefix):
+            return text[len(prefix):].lstrip(" .:-")
+    return text[:400]
+
+
+def camera_eye_snapshot() -> dict:
+    with _camera_eye_lock:
+        return dict(_camera_eye)
+
+
+def camera_eye_store(
+    image: bytes, mime_type: str, description: Optional[str], hazard: bool,
+    kind: Optional[str], evidence_key: Optional[str], request_id: Optional[str],
+) -> None:
+    with _camera_eye_lock:
+        _camera_eye.update({
+            "image": image, "mime_type": mime_type, "captured_at": now(),
+            "description": description, "hazard": hazard, "kind": kind,
+            "evidence_key": evidence_key, "request_id": request_id,
+        })
+        if request_id and _camera_capture.get("request_id") == request_id:
+            _camera_capture["fulfilled_at"] = now()
+
+
+def camera_capture_pending() -> Optional[dict]:
+    with _camera_eye_lock:
+        request_id = _camera_capture.get("request_id")
+        requested_at = _camera_capture.get("requested_at")
+        if not request_id or _camera_capture.get("fulfilled_at") is not None:
+            return None
+        if not isinstance(requested_at, datetime) or now() - requested_at > CAMERA_CAPTURE_TTL:
+            _camera_capture.update({"request_id": None, "requested_at": None})
+            return None
+        return {
+            "request_id": request_id,
+            "requested_at": requested_at,
+            "age_seconds": int((now() - requested_at).total_seconds()),
+        }
+
+
+def camera_hazard_kind(verdict: str) -> str:
+    upper = verdict.upper()
+    if "FUEGO" in upper or "HUMO" in upper or "INCENDIO" in upper:
+        return "smoke_or_fire"
+    if "CRISTAL" in upper or "VIDRIO" in upper:
+        return "broken_glass"
+    if "PUERTA" in upper:
+        return "door_open"
+    if "AGUA" in upper:
+        return "water_running"
+    return "dangerous_impact"
+
+
+def store_camera_evidence(image: bytes, tag: str) -> Optional[str]:
+    """KAN-178: guarda la foto del ojo Tapo en S3 (misma nube que el resto de Faro)."""
+    bucket = os.getenv("AURA_EVIDENCE_BUCKET", "").strip()
+    if not bucket:
+        return None
+    try:
+        import boto3
+
+        client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-2"))
+        moment = datetime.now(timezone.utc)
+        key = f"camera/{moment:%Y-%m-%d}/{moment:%H%M%S}-{tag}-{uuid4().hex[:8]}.jpg"
+        client.put_object(Bucket=bucket, Key=key, Body=image, ContentType="image/jpeg")
+        return key
+    except Exception as error:  # noqa: BLE001
+        logging.warning("Camera evidence upload failed: %s", error)
+        return None
+
+
+class CameraPatrolConfig(BaseModel):
+    enabled: bool = False
+    sweep_degrees: int = Field(default=180, ge=30, le=360)
+    step_degrees: int = Field(default=30, ge=10, le=90)
+    interval_seconds: int = Field(default=300, ge=30, le=3600)
+    daily_budget: int = Field(default=500, ge=50, le=5000)
+    tilt: float = Field(default=-0.4, ge=-1.0, le=1.0)
+    zone: str = Field(default="", max_length=120)
+    vertical: bool = False
+    vertical_degrees: int = Field(default=60, ge=10, le=120)
+    vertical_step_degrees: int = Field(default=30, ge=10, le=90)
+
+
+def load_camera_patrol() -> CameraPatrolConfig:
+    row = repository.event_db.execute(
+        "SELECT value_json FROM configuration WHERE key='camera_patrol'"
+    ).fetchone()
+    if not row:
+        return CameraPatrolConfig()
+    try:
+        return CameraPatrolConfig.model_validate(json.loads(row[0]))
+    except (TypeError, ValueError):
+        return CameraPatrolConfig()
+
+
+def load_camera_usage() -> tuple[str, int]:
+    today = datetime.now(timezone.utc).date().isoformat()
+    row = repository.event_db.execute(
+        "SELECT value_json FROM configuration WHERE key='camera_usage'"
+    ).fetchone()
+    if not row:
+        return today, 0
+    try:
+        data = json.loads(row[0])
+    except (TypeError, ValueError):
+        return today, 0
+    if data.get("day") != today:
+        return today, 0
+    return today, int(data.get("count", 0))
+
+
+def bump_camera_usage(budget: int) -> tuple[int, bool]:
+    today, count = load_camera_usage()
+    allowed = count < budget
+    if allowed:
+        count += 1
+        with repository.lock:
+            repository.event_db.execute(
+                "INSERT OR REPLACE INTO configuration(key, value_json) VALUES('camera_usage', ?)",
+                (json.dumps({"day": today, "count": count}),),
+            )
+            repository.event_db.commit()
+    return count, allowed
+
+
+@app.get("/v1/camera/patrol", response_model=CameraPatrolConfig)
+def get_camera_patrol(authorization: Optional[str] = Header(default=None)) -> CameraPatrolConfig:
+    require_auth(authorization)
+    return load_camera_patrol()
+
+
+@app.put("/v1/camera/patrol", response_model=CameraPatrolConfig)
+def set_camera_patrol(
+    request: CameraPatrolConfig, authorization: Optional[str] = Header(default=None),
+) -> CameraPatrolConfig:
+    require_auth(authorization)
+    with repository.lock:
+        repository.event_db.execute(
+            "INSERT OR REPLACE INTO configuration(key, value_json) VALUES('camera_patrol', ?)",
+            (json.dumps(request.model_dump()),),
+        )
+        repository.event_db.commit()
+    return request
+
+
+@app.get("/v1/camera/usage")
+def get_camera_usage(authorization: Optional[str] = Header(default=None)) -> dict:
+    require_auth(authorization)
+    config = load_camera_patrol()
+    day, used = load_camera_usage()
+    return {
+        "day": day, "used": used, "budget": config.daily_budget,
+        "remaining": max(0, config.daily_budget - used),
+    }
+
+
+@app.post("/v1/camera-hazard")
+def check_camera_hazard(
+    request: CameraHazardCheck,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """KAN-178: imagen del ojo (cámara Tapo) -> aviso urgente a la familia si hay peligro."""
+    require_auth(authorization)
+    try:
+        image = base64.b64decode(request.image_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid image payload")
+    if not image or len(image) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Image size out of range")
+    mime_type = request.mime_type if request.mime_type.startswith("image/") else "image/jpeg"
+    _LAST_CAMERA_FRAME["at"] = now()
+    patrol = load_camera_patrol()
+    _, within_budget = bump_camera_usage(patrol.daily_budget)
+    if not within_budget:
+        return {
+            "hazard": False,
+            "verdict": "Análisis pausado: presupuesto diario de IA agotado",
+            "family_alert_status": None,
+            "evidence_key": None,
+            "skipped": "budget",
+        }
+    verdict = describe_camera_hazard(request.image_base64, mime_type)
+    if not verdict.strip().upper().startswith("PELIGRO"):
+        evidence_key = store_camera_evidence(image, "ok")
+        camera_eye_store(
+            image, mime_type, camera_scene_description(verdict), False, None, evidence_key, None,
+        )
+        return {
+            "hazard": False, "verdict": verdict[:400], "family_alert_status": None,
+            "evidence_key": evidence_key,
+        }
+    result = process_camera_hazard(image, verdict)
+    camera_eye_store(
+        image, mime_type, camera_scene_description(verdict), True,
+        result.get("kind"), result.get("evidence_key"), None,
+    )
+    return result
+
+
+def process_camera_hazard(image: bytes, verdict: str) -> dict:
+    """KAN-178: ante un veredicto PELIGRO ya calculado, avisa a la familia y deja rastro."""
+    kind = camera_hazard_kind(verdict)
+    evidence_key = store_camera_evidence(image, kind)
+    checked_at = now()
+    with _camera_hazard_lock:
+        previous = _camera_hazard_last.get(kind)
+        if previous and checked_at - previous < CAMERA_HAZARD_COOLDOWN:
+            return {
+                "hazard": True, "kind": kind, "verdict": verdict[:400],
+                "family_alert_status": "dedup", "evidence_key": evidence_key,
+                "spoken": CAMERA_HAZARD_SPEECH.get(kind, CAMERA_HAZARD_SPEECH["dangerous_impact"]),
+            }
+        _camera_hazard_last[kind] = checked_at
+    typology = CAMERA_HAZARD_TYPOLOGY.get(kind, "un posible peligro")
+    message = f"Faro ha detectado {typology} en casa con la cámara: {verdict.strip()[:200]}"
+    spoken_text = CAMERA_HAZARD_SPEECH.get(kind, CAMERA_HAZARD_SPEECH["dangerous_impact"])
+    contacts = enabled_alert_contacts()
+    family_alert_status = "no_contact"
+    photo_delivery_status = None
+    location = None
+    latitude = longitude = accuracy = None
+    source = recorded_at = None
+    tracking_url = None
+    if contacts:
+        location, tracking_url = active_alert_location()
+        latitude = longitude = accuracy = None
+        source = recorded_at = None
+        if location is not None:
+            latitude, longitude = location.latitude, location.longitude
+            accuracy, source, recorded_at = (
+                location.accuracy_meters, location.source, location.recorded_at,
+            )
+        else:
+            recent = recent_device_location()
+            if recent is not None:
+                latitude, longitude = recent["latitude"], recent["longitude"]
+                accuracy, source = recent["accuracy_meters"], "gps"
+                recorded_at = recent["recorded_at"]
+            else:
+                profile = repository.get_patient_profile()
+                home = profile.home_address if profile else None
+                if home is not None and home.latitude is not None and home.longitude is not None:
+                    latitude, longitude = home.latitude, home.longitude
+                    source, recorded_at = "last_known", now()
+        deliveries, _ = send_alert_to_contacts(
+            contacts,
+            EmergencyAlertCreate(
+                kind="hazard",
+                spoken_message=message,
+                explicit_help_request=False,
+                latitude=latitude,
+                longitude=longitude,
+                location_accuracy_meters=accuracy,
+                location_source=source,
+                location_recorded_at=recorded_at,
+                tracking_url=tracking_url,
+            ),
+            image=image,
+        )
+        family_alert_status = (
+            "sent" if any(delivery.message_id for _, delivery in deliveries)
+            else "test_mode" if deliveries else "failed"
+        )
+        if deliveries:
+            statuses = [delivery.photo_status for _, delivery in deliveries]
+            photo_delivery_status = "sent" if "sent" in statuses else statuses[0]
+    hazard_event = repository.add_event(EventCreate(
+        kind="hazard", summary=message, source="backend", severity="urgent",
+        latitude=latitude, longitude=longitude,
+        metadata={
+            "hazard": kind, "camera": "tapo",
+            "family_alert_status": family_alert_status,
+            "photo_delivery_status": photo_delivery_status,
+            "evidence_key": evidence_key,
+            "location_included": latitude is not None and longitude is not None,
+            "location_source": source,
+        },
+    ))
+    repository.enqueue_voice_reminder(hazard_event.id, spoken_text, kind="hazard")
+    return {
+        "hazard": True, "kind": kind, "verdict": verdict[:400],
+        "family_alert_status": family_alert_status,
+        "photo_delivery_status": photo_delivery_status,
+        "spoken": spoken_text,
+        "evidence_key": evidence_key,
+    }
+
+
+def camera_eye_name() -> str:
+    return (os.getenv("AURA_CAMERA_NAME") or "Ojo (cámara Tapo)").strip() or "Ojo (cámara Tapo)"
+
+
+@app.post("/v1/camera/frame")
+def upload_camera_frame(
+    request: CameraFrameUpload,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """KAN-178: el puente local sube un fotograma BAJO DEMANDA del ojo y se reconoce aquí."""
+    require_auth(authorization)
+    try:
+        image = base64.b64decode(request.image_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid image payload")
+    if not image or len(image) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Image size out of range")
+    mime_type = request.mime_type if request.mime_type.startswith("image/") else "image/jpeg"
+    _LAST_CAMERA_FRAME["at"] = now()
+    patrol = load_camera_patrol()
+    _, within_budget = bump_camera_usage(patrol.daily_budget)
+    if not within_budget:
+        evidence_key = store_camera_evidence(image, "preview")
+        camera_eye_store(
+            image, mime_type, None, False, None, evidence_key, request.request_id,
+        )
+        return {
+            "ok": True, "captured_at": now().isoformat(), "description": None,
+            "hazard": False, "skipped": "budget", "evidence_key": evidence_key,
+        }
+    verdict = describe_camera_scene(request.image_base64, mime_type)
+    hazard = verdict.strip().upper().startswith("PELIGRO")
+    kind = camera_hazard_kind(verdict) if hazard else None
+    result: dict = {}
+    evidence_key = None
+    if hazard:
+        result = process_camera_hazard(image, verdict)
+        evidence_key = result.get("evidence_key")
+    else:
+        evidence_key = store_camera_evidence(image, "preview")
+    description = camera_scene_description(verdict)
+    camera_eye_store(
+        image, mime_type, description, hazard, kind, evidence_key, request.request_id,
+    )
+    return {
+        "ok": True,
+        "captured_at": now().isoformat(),
+        "description": description,
+        "verdict": verdict[:400],
+        "hazard": hazard,
+        "kind": kind,
+        "evidence_key": evidence_key,
+        "family_alert_status": result.get("family_alert_status"),
+        "spoken": result.get("spoken"),
+    }
+
+
+@app.get("/v1/camera/status")
+def get_camera_eye_status(authorization: Optional[str] = Header(default=None)) -> dict:
+    require_auth(authorization)
+    eye = camera_eye_snapshot()
+    last_frame = _LAST_CAMERA_FRAME.get("at")
+    patrol = load_camera_patrol()
+    day, used = load_camera_usage()
+    pending = camera_capture_pending()
+    captured_at = eye.get("captured_at")
+    return {
+        "name": camera_eye_name(),
+        "online": last_frame is not None and (now() - last_frame) < timedelta(minutes=5),
+        "last_frame_at": captured_at.isoformat() if isinstance(captured_at, datetime) else None,
+        "description": eye.get("description"),
+        "hazard": bool(eye.get("hazard")),
+        "kind": eye.get("kind"),
+        "evidence_key": eye.get("evidence_key"),
+        "has_preview": eye.get("image") is not None,
+        "pending_capture": pending,
+        "patrol_enabled": patrol.enabled,
+        "budget": {
+            "day": day, "used": used, "budget": patrol.daily_budget,
+            "remaining": max(0, patrol.daily_budget - used),
+        },
+    }
+
+
+@app.get("/v1/camera/preview")
+def get_camera_eye_preview(authorization: Optional[str] = Header(default=None)) -> Response:
+    require_auth(authorization)
+    eye = camera_eye_snapshot()
+    image = eye.get("image")
+    if not image:
+        raise HTTPException(status_code=404, detail="Todavía no hay ninguna imagen del ojo")
+    mime_type = str(eye.get("mime_type") or "image/jpeg")
+    return Response(content=image, media_type=mime_type, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/camera/capture", status_code=202)
+def request_camera_capture(
+    request: CameraCaptureRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """KAN-178: pide UNA captura del ojo; el puente local la hará y la subirá."""
+    require_auth(authorization)
+    request_id = uuid4().hex
+    with _camera_eye_lock:
+        _camera_capture.update({
+            "request_id": request_id, "requested_at": now(), "fulfilled_at": None,
+        })
+    return {
+        "request_id": request_id,
+        "requested_at": now().isoformat(),
+        "status": "pending",
+        "note": request.note,
+    }
+
+
+@app.get("/v1/camera/capture")
+def take_camera_capture_request(
+    authorization: Optional[str] = Header(default=None),
+) -> Response:
+    """KAN-178: el puente local pregunta si hay una captura pedida (204 si no hay)."""
+    require_auth(authorization)
+    pending = camera_capture_pending()
+    if pending is None:
+        return Response(status_code=204)
+    return JSONResponse({
+        "request_id": pending["request_id"],
+        "requested_at": pending["requested_at"].isoformat(),
+        "age_seconds": pending["age_seconds"],
+    })
 
 
 @app.get("/track/{share_token}", response_class=HTMLResponse, include_in_schema=False)

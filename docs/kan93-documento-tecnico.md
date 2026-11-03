@@ -308,11 +308,19 @@ Escucha ambiental:
 - `POST /v1/acoustic-events`, `POST /v1/acoustic-events/response`,
   `POST /v1/acoustic-events/tick`, `GET /v1/acoustic-episodes`.
 
+Camaras locales (KAN-178):
+
+- `POST /v1/camera-hazard` (imagen -> deteccion de peligro y aviso urgente).
+- `POST /v1/camera/frame` (fotograma bajo demanda -> reconocimiento y preview).
+- `GET /v1/camera/status`, `GET /v1/camera/preview` (estado y ultima imagen del ojo).
+- `POST /v1/camera/capture` (solicita una captura) y `GET /v1/camera/capture` (el puente local la recoge).
+- `GET /v1/camera/patrol`, `PUT /v1/camera/patrol` y `GET /v1/camera/usage` (patrulla y presupuesto de IA).
+
 ## 3. Portal Faro Familia (`aura-care/web`)
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v58`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v59`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.
