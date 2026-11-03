@@ -8,7 +8,7 @@ const authHeaders = token ? {Authorization: `Bearer ${token}`} : {};
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/assets/sw.js');
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {...options, headers: {...authHeaders, ...(options.headers || {})}});
+  const response = await fetch(path, {...options, cache: 'no-store', headers: {...authHeaders, ...(options.headers || {})}});
   if (!response.ok) {
     let message = `No se pudo completar la operación (${response.status}).`;
     try { message = (await response.json()).detail || message; } catch {}
@@ -125,8 +125,8 @@ function renderCameraEye() {
       const before = (await refresh()).last_frame_at;
       await api('/v1/camera/capture', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({note: 'portal'})});
       let received = false;
-      for (let attempt = 0; attempt < 20 && !received; attempt += 1) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+      for (let attempt = 0; attempt < 45 && !received; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
         const status = await refresh();
         received = status.last_frame_at && status.last_frame_at !== before;
       }
