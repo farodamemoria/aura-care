@@ -408,6 +408,10 @@ class VoiceReminderAck(BaseModel):
     ids: list[UUID] = Field(default_factory=list)
 
 
+class VoiceReminderRelease(BaseModel):
+    ids: list[UUID] = Field(default_factory=list)
+
+
 class VoiceReminderClaim(BaseModel):
     reminders: list[VoiceReminder] = Field(default_factory=list)
     lease_seconds: int = 90
@@ -1851,6 +1855,23 @@ class InMemoryRepository:
     def ack_voice_reminders(self, ids: list[str]) -> int:
         """KAN-195: confirma la entrega real de los recordatorios indicados."""
         return self._mark_voice_reminders_delivered(ids)
+
+    def release_voice_reminders(self, ids: list[str]) -> int:
+        """KAN-196: suelta una reserva que no se llego a reproducir para reintentarla ya.
+
+        No toca `spoken_at` ni `asked_at`: el recordatorio (y el ejercicio) siguen pendientes.
+        """
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self.lock:
+            cursor = self.event_db.execute(
+                f"UPDATE voice_reminders SET claimed_until=NULL "
+                f"WHERE id IN ({placeholders}) AND spoken_at IS NULL",
+                tuple(ids),
+            )
+            self.event_db.commit()
+            return cursor.rowcount or 0
 
     def take_voice_reminders(self) -> list[dict]:
         """Compatibilidad KAN-158: entrega y marca en el mismo paso (clientes antiguos)."""
@@ -5626,6 +5647,10 @@ def run_exercise_tick(reference: Optional[datetime] = None) -> int:
             continue
         repository.enqueue_voice_reminder(exercise.id, exercise.question, kind="exercise")
         asked += 1
+    if asked:
+        logging.getLogger("aura.exercises").info(
+            "ejercicios encolados para anunciar: %s (siguen pendientes hasta el ack)", asked
+        )
     return asked
 
 
@@ -6171,6 +6196,15 @@ def ack_voice_reminders(
     """KAN-195: marca como hablado solo lo que se ha reproducido de verdad."""
     require_auth(authorization)
     return {"acked": repository.ack_voice_reminders([str(item) for item in payload.ids])}
+
+
+@app.post("/v1/voice-reminders/release")
+def release_voice_reminders(
+    payload: VoiceReminderRelease, authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """KAN-196: suelta reservas fallidas (sin sesion o reproduccion rota) para reintentarlas."""
+    require_auth(authorization)
+    return {"released": repository.release_voice_reminders([str(item) for item in payload.ids])}
 
 
 @app.post("/v1/voice-reminders/{event_id}/retry")

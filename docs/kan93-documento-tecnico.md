@@ -168,6 +168,13 @@ activo, la reserva caduca y el recordatorio vuelve a la cola. El pipeline de voz
 cancela sus tareas de fondo al terminar la sesión, de modo que una sesión cerrada no puede
 consumir recordatorios.
 
+**Ejercicios cognitivos (KAN-196).** El tick de ejercicios encola el anuncio en la misma cola con
+`kind=exercise`, pero el ejercicio solo pasa a «preguntado» cuando el pipeline confirma con
+`POST /v1/voice-reminders/ack`. Si no hay cliente autenticado no se reserva nada, y si la
+reproducción falla el pipeline suelta la reserva con `POST /v1/voice-reminders/release` para
+reintentarlo en la siguiente vuelta (sin esperar a que caduque el lease) dejando constancia en el
+log.
+
 ### 2.9 Inventario de endpoints
 
 Portal y estáticos:
@@ -266,7 +273,8 @@ Agenda:
   `PATCH /v1/calendar-events/{event_id}`, `DELETE /v1/calendar-events/{event_id}`,
   `POST /v1/calendar-tick`, `GET /v1/voice-reminders` (con `?peek=1` para mirar sin consumir),
   `POST /v1/voice-reminders/claim`, `POST /v1/voice-reminders/ack`,
-  `POST /v1/voice-reminders/{event_id}/retry`, `POST /v1/glasses/not-worn`.
+  `POST /v1/voice-reminders/release`, `POST /v1/voice-reminders/{event_id}/retry`,
+  `POST /v1/glasses/not-worn`.
 
 Conversación familiar:
 
