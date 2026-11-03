@@ -155,3 +155,11 @@ def test_budget_pause_keeps_the_preview(client: TestClient, monkeypatch: pytest.
     assert body["skipped"] == "budget"
     assert body["hazard"] is False
     assert client.get("/v1/camera/preview", headers=HEADERS).content == JPEG
+
+
+def test_eye_endpoints_are_never_cached(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, 'describe_camera_scene', lambda image, mime: 'OK: pasillo vacio.')
+    client.post('/v1/camera/frame', headers=HEADERS, json={'image_base64': JPEG_B64})
+    client.post('/v1/camera/capture', headers=HEADERS, json={})
+    for path in ('/v1/camera/status', '/v1/camera/preview', '/v1/camera/capture'):
+        assert client.get(path, headers=HEADERS).headers['cache-control'] == 'no-store'

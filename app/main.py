@@ -4352,8 +4352,11 @@ def upload_camera_frame(
 
 
 @app.get("/v1/camera/status")
-def get_camera_eye_status(authorization: Optional[str] = Header(default=None)) -> dict:
+def get_camera_eye_status(
+    response: Response, authorization: Optional[str] = Header(default=None),
+) -> dict:
     require_auth(authorization)
+    response.headers["Cache-Control"] = "no-store"
     eye = camera_eye_snapshot()
     last_frame = _LAST_CAMERA_FRAME.get("at")
     patrol = load_camera_patrol()
@@ -4417,12 +4420,12 @@ def take_camera_capture_request(
     require_auth(authorization)
     pending = camera_capture_pending()
     if pending is None:
-        return Response(status_code=204)
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
     return JSONResponse({
         "request_id": pending["request_id"],
         "requested_at": pending["requested_at"].isoformat(),
         "age_seconds": pending["age_seconds"],
-    })
+    }, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/track/{share_token}", response_class=HTMLResponse, include_in_schema=False)

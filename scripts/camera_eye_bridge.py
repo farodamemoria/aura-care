@@ -101,13 +101,34 @@ def describe(result: dict) -> str:
     return f"Reconocido: {result.get('description')}"
 
 
+def last_frame_at(args: argparse.Namespace) -> str | None:
+    status, body = send_json(args.backend, args.token, "GET", "/v1/camera/status")
+    if status != 200:
+        return None
+    return body.get("last_frame_at")
+
+
 def capture_once(args: argparse.Namespace, request_id: str | None = None) -> bool:
     jpeg = capture_frame(args.rtsp)
     if not jpeg:
         print("Sin fotograma de la camara.", flush=True)
         return False
-    print(describe(upload_frame(args.backend, args.token, jpeg, request_id)), flush=True)
-    return True
+    before = last_frame_at(args)
+    try:
+        print(describe(upload_frame(args.backend, args.token, jpeg, request_id)), flush=True)
+        return True
+    except Exception as error:  # noqa: BLE001
+        # El gateway puede cortar la respuesta (504) aunque el backend termine el
+        # analisis: se comprueba si el ojo ya tiene una imagen nueva antes de fallar.
+        for _ in range(20):
+            time.sleep(3)
+            current = last_frame_at(args)
+            if current and current != before:
+                status, body = send_json(args.backend, args.token, "GET", "/v1/camera/status")
+                print(f"Reconocido (el gateway corto la respuesta): {body.get('description')}", flush=True)
+                return True
+        print(f"Error subiendo el fotograma: {error}", flush=True)
+        return False
 
 
 def demand_loop(args: argparse.Namespace) -> None:
