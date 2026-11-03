@@ -73,11 +73,16 @@ def test_repeated_cough_asks_and_records_a_check_in(client: TestClient) -> None:
 def test_reassuring_answer_stops_without_alerting(client: TestClient) -> None:
     configure_contact(client)
     cough(client, 3)
+    hazards_before = len(client.get("/v1/events", headers=HEADERS, params={"kind": "hazard"}).json())
     outcome = client.post("/v1/acoustic-events/response", headers=HEADERS, json={"text": "Estoy bien, gracias"}).json()
     assert outcome["action"] == "closed"
     assert outcome["alerted"] is False
     history = client.get("/v1/acoustic-episodes", headers=HEADERS).json()["history"]
     assert history[0]["outcome"] == "reassured"
+    events = client.get("/v1/events", headers=HEADERS, params={"kind": "episode"}).json()
+    assert any(event["metadata"].get("acoustic_stage") == "reassured" for event in events)
+    hazards_after = client.get("/v1/events", headers=HEADERS, params={"kind": "hazard"}).json()
+    assert len(hazards_after) == hazards_before
 
 
 def test_help_request_escalates_to_the_care_network(client: TestClient) -> None:
