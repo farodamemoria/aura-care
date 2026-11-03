@@ -6895,6 +6895,16 @@ def _apply_acoustic_outcome(outcome: dict, at: datetime, signal: str) -> dict:
                       "recipients_delivered": alert["recipients_delivered"]},
         ))
         outcome["alert"] = alert
+    elif action == "closed":
+        repository.add_event(EventCreate(
+            kind="episode",
+            summary=f"Posible {label}: el paciente responde que está bien; sin aviso",
+            source="glasses", severity="info", occurred_at=at,
+            metadata={"acoustic_signal": signal, "acoustic_stage": "reassured",
+                      "episode_id": outcome.get("episode_id", ""),
+                      "outcome": outcome.get("outcome", "reassured")},
+        ))
+        outcome["alert"] = None
     return outcome
 
 
