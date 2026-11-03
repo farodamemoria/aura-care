@@ -41,6 +41,7 @@ HELP_PATTERNS = (
     r"\bme\s+duele\b",
     r"\bme\s+ahogo\b",
     r"\bno\s+puedo\s+(respirar|moverme|levantarme|caminar)\b",
+    r"\bme\s+(he\s+)?caid[oa]\b",
     r"\bme\s+ca[ií]\b",
 )
 
@@ -79,6 +80,31 @@ def is_lost_request(text: str) -> bool:
     """Detecta peticiones de ayuda por desorientación en español y gallego."""
     normalized = normalize_text(text)
     return any(re.search(pattern, normalized) for pattern in LOST_PATTERNS)
+
+
+NEGATIVE_ANSWER_PATTERNS = (
+    r"^\s*(no|non|nop|nope)\s*[.!]?\s*$",
+    r"^\s*(no|non)\s*,?\s*(gracias|gracias faro|nao)\s*[.!]?\s*$",
+)
+
+
+def interpret_check_in_answer(text: str) -> Optional[str]:
+    """Clasifica la respuesta hablada a «¿Estás bien?».
+
+    Devuelve ``"help"`` si pide ayuda (incluido un «no» seco), ``"reassuring"``
+    si tranquiliza y ``None`` cuando el audio no es una respuesta clara (por
+    ejemplo, una frase larga dirigida a otra persona).
+    """
+    normalized = normalize_text(text).strip()
+    if not normalized:
+        return None
+    if is_help_request(normalized):
+        return "help"
+    if any(re.search(pattern, normalized) for pattern in NEGATIVE_ANSWER_PATTERNS):
+        return "help"
+    if is_reassuring(normalized):
+        return "reassuring"
+    return None
 
 
 @dataclass(frozen=True)
@@ -180,9 +206,10 @@ class EnvironmentalListeningEngine:
             return {"action": "ignored", "reason": "no_active_episode"}
         episode.response_text = text
         episode.updated_at = at
-        if is_help_request(text):
+        answer = interpret_check_in_answer(text)
+        if answer == "help":
             return self._escalate(episode, at, reason="help_request", explicit=True)
-        if is_reassuring(text):
+        if answer == "reassuring":
             episode.status = "reassured"
             episode.outcome = "reassured"
             self._close(episode, at)

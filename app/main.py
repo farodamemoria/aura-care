@@ -34,6 +34,7 @@ from .environmental_listening import (
     ACOUSTIC_SIGNAL_LABELS,
     EnvironmentalListeningEngine,
     ListeningConfig,
+    interpret_check_in_answer,
     is_lost_request,
     normalize_text,
 )
@@ -3134,6 +3135,7 @@ class VoiceIntentResult(BaseModel):
     matched: bool
     transcript: str
     alert_status: Optional[str] = None
+    acoustic: Optional[dict] = None
 
 
 def transcribe_audio(data: bytes, filename: str = "command.wav") -> Optional[str]:
@@ -3189,6 +3191,22 @@ async def voice_intent(
         transcript = None
     if not transcript:
         return VoiceIntentResult(matched=False, transcript="")
+    check_in_answer = interpret_check_in_answer(transcript)
+    active_episode = acoustic_listening.active_episode
+    if (
+        check_in_answer is not None
+        and active_episode is not None
+        and active_episode.status == "awaiting_response"
+    ):
+        at = now()
+        outcome = acoustic_listening.respond(transcript, at)
+        applied = _apply_acoustic_outcome(outcome, at, active_episode.signal)
+        return VoiceIntentResult(
+            matched=check_in_answer == "help",
+            transcript=transcript,
+            alert_status=(applied.get("alert") or {}).get("status"),
+            acoustic=applied,
+        )
     awaiting = None
     for exercise in repository.cognitive_exercises.values():
         if (
