@@ -87,17 +87,15 @@ function icon(name, size = 16) {
 }
 
 function renderCameraEye() {
-  const target = document.querySelector('#devices');
+  const target = document.querySelector('#device-camera-body');
   if (!target) return;
-  const card = document.createElement('article'); card.className = 'device-card';
-  const title = document.createElement('strong'); title.textContent = 'Ojo de Faro (cámara de casa)';
-  const state = document.createElement('p'); state.textContent = 'Comprobando la cámara…';
-  const recognition = document.createElement('p'); recognition.className = 'meta';
+  target.replaceChildren();
+  const state = document.createElement('p'); state.className = 'device-meta'; state.textContent = 'Comprobando la cámara…';
+  const recognition = document.createElement('p'); recognition.className = 'device-recognition';
   recognition.textContent = 'Pulsa «Ver ahora» para pedir una foto y reconocer lo que ve.';
   const image = document.createElement('img');
-  image.alt = 'Última imagen del ojo de Faro'; image.hidden = true;
-  image.style.width = '100%'; image.style.borderRadius = '14px'; image.style.marginTop = '10px';
-  const actions = document.createElement('div'); actions.className = 'actions';
+  image.alt = 'Última imagen del ojo de Faro'; image.hidden = true; image.className = 'camera-preview';
+  const actions = document.createElement('div'); actions.className = 'device-actions';
   const shoot = document.createElement('button'); shoot.className = 'primary'; shoot.textContent = 'Ver ahora';
   const hint = document.createElement('p'); hint.className = 'meta';
   hint.textContent = 'Captura bajo demanda: la cámara solo se abre cuando la pides, no en bucle.';
@@ -136,47 +134,62 @@ function renderCameraEye() {
   };
 
   actions.append(shoot);
-  card.append(title, state, recognition, actions, image, hint);
-  target.append(card);
+  target.append(state, recognition, actions, image, hint);
   refresh().catch(() => { state.textContent = 'No se pudo consultar la cámara.'; });
 }
 
 function renderPatrol(patrol, usage) {
-  const target = document.querySelector('#devices');
+  const target = document.querySelector('#device-camera-patrol');
   if (!target || !patrol) return;
-  const card = document.createElement('article'); card.className = 'device-card';
-  const title = document.createElement('strong'); title.textContent = 'Patrulla del ojo';
+  target.replaceChildren();
+  const title = document.createElement('p');
+  title.className = 'device-subtitle';
+  title.textContent = 'Patrulla de la cámara';
   const state = document.createElement('p');
+  state.className = 'device-meta';
   const minutes = Math.round((patrol.interval_seconds || 300) / 60);
-  state.textContent = (patrol.enabled ? 'Activa' : 'Apagada') + ' · ' + (patrol.sweep_degrees || 180) + '° · cada ' + minutes + ' min';
+  state.textContent = (patrol.enabled ? 'Activa' : 'Apagada') + ' · ' + (patrol.sweep_degrees || 180) + '° horizontal · cada ' + minutes + ' min';
   if (patrol.vertical) state.textContent += ' · vertical ' + (patrol.vertical_degrees || 60) + '°';
   if (usage) state.textContent += ' · IA ' + usage.used + '/' + usage.budget + ' hoy';
 
-  const form = document.createElement('form'); form.className = 'form-grid';
+  const form = document.createElement('form');
+  form.className = 'device-patrol-form';
+  const field = (labelText, control) => {
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    label.append(control);
+    return label;
+  };
   const select = document.createElement('select');
   [180, 260, 360].forEach(value => {
     const option = document.createElement('option'); option.value = String(value); option.textContent = value + '°';
     select.append(option);
   });
   select.value = String(patrol.sweep_degrees || 180);
+  const verticalSelect = document.createElement('select');
+  [30, 60, 90].forEach(value => {
+    const option = document.createElement('option'); option.value = String(value); option.textContent = value + '°';
+    verticalSelect.append(option);
+  });
+  verticalSelect.value = String(patrol.vertical_degrees || 60);
   const interval = document.createElement('input'); interval.type = 'number'; interval.min = '1'; interval.max = '60';
-  interval.value = String(minutes); interval.title = 'Intervalo entre pasadas (minutos)';
+  interval.value = String(minutes);
   const budget = document.createElement('input'); budget.type = 'number'; budget.min = '50'; budget.max = '5000';
-  budget.value = String(patrol.daily_budget || 500); budget.title = 'Máximo de análisis de IA al día';
+  budget.value = String(patrol.daily_budget || 500);
   const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = Boolean(patrol.enabled);
   const labelToggle = document.createElement('label'); labelToggle.className = 'check';
   labelToggle.append(toggle, document.createTextNode(' Activar patrulla'));
   const vertical = document.createElement('input'); vertical.type = 'checkbox'; vertical.checked = Boolean(patrol.vertical);
   const labelVertical = document.createElement('label'); labelVertical.className = 'check';
   labelVertical.append(vertical, document.createTextNode(' Búsqueda vertical'));
-  const verticalSelect = document.createElement('select');
-  [30, 60, 90].forEach(value => {
-    const option = document.createElement('option'); option.value = String(value); option.textContent = 'Vertical ' + value + '°';
-    verticalSelect.append(option);
-  });
-  verticalSelect.value = String(patrol.vertical_degrees || 60);
-  const button = document.createElement('button'); button.type = 'submit'; button.className = 'primary'; button.textContent = 'Guardar';
-  form.append(select, verticalSelect, interval, budget, labelToggle, labelVertical, button);
+  const button = document.createElement('button'); button.type = 'submit'; button.className = 'secondary'; button.textContent = 'Guardar patrulla';
+  form.append(
+    field('Barrido horizontal', select),
+    field('Barrido vertical', verticalSelect),
+    field('Intervalo (min)', interval),
+    field('Presupuesto IA/día', budget),
+    labelToggle, labelVertical, button,
+  );
   form.onsubmit = async (event) => {
     event.preventDefault();
     button.disabled = true;
@@ -197,12 +210,183 @@ function renderPatrol(patrol, usage) {
       await load();
     } catch (error) { notify(error); } finally { button.disabled = false; }
   };
-  card.append(title, state, form);
-  target.append(card);
+  target.append(title, state, form);
+}
+
+const HEALTH_TONE = {good: 'Bien', warn: 'Atención', bad: 'Revisar', neutral: 'Sin dato'};
+
+function minutesAgo(value) {
+  if (!value) return null;
+  const stamp = new Date(value).getTime();
+  if (Number.isNaN(stamp)) return null;
+  return Math.max(0, Math.round((Date.now() - stamp) / 60000));
+}
+
+function timeAgoText(minutes) {
+  if (minutes == null) return 'sin datos';
+  if (minutes < 1) return 'ahora mismo';
+  if (minutes < 60) return `hace ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `hace ${hours} h`;
+  return `hace ${Math.round(hours / 24)} d`;
+}
+
+function toneForAge(minutes, good = 5, warn = 30) {
+  if (minutes == null) return 'neutral';
+  if (minutes < good) return 'good';
+  if (minutes < warn) return 'warn';
+  return 'bad';
+}
+
+function latestStamp(items) {
+  return items.reduce((best, value) => {
+    if (!value) return best;
+    const stamp = new Date(value).getTime();
+    if (Number.isNaN(stamp)) return best;
+    return !best || stamp > best.stamp ? {stamp, value} : best;
+  }, null);
+}
+
+function healthCard(title, value, detail, tone) {
+  const card = document.createElement('article');
+  card.className = `health-card health-card--${tone}`;
+  const name = document.createElement('span');
+  name.className = 'health-card-title';
+  name.textContent = title;
+  const main = document.createElement('strong');
+  main.className = 'health-card-value';
+  main.textContent = value;
+  const chip = document.createElement('span');
+  chip.className = `health-chip health-chip--${tone}`;
+  chip.textContent = HEALTH_TONE[tone] || HEALTH_TONE.neutral;
+  const text = document.createElement('p');
+  text.className = 'health-card-detail';
+  text.textContent = detail;
+  card.append(name, main, chip, text);
+  return card;
+}
+
+function renderHealth({inventory, tracking, reviews, contacts, events}) {
+  const target = document.querySelector('#device-health');
+  if (!target) return;
+  target.replaceChildren();
+  const sources = ['glasses', 'phone', 'portal'];
+  const allEvents = events || [];
+  const pending = (reviews || []).filter(review => review.status === 'pending').length;
+  const activeContacts = (contacts || []).filter(contact => contact.alerts_enabled && contact.whatsapp_consent);
+  const camera = ((inventory && inventory.cameras) || [])[0];
+
+  const ages = sources.map(kind => ({kind, minutes: minutesAgo(deviceSource(inventory || {}, kind).last_event_at)}));
+  const knownAges = ages.filter(item => item.minutes != null);
+  const newest = knownAges.length ? Math.min(...knownAges.map(item => item.minutes)) : null;
+
+  const batteries = {};
+  allEvents.forEach(event => {
+    const value = event && event.metadata ? event.metadata.battery_percent : null;
+    if (value == null || !event.source) return;
+    const stamp = new Date(event.created_at || event.occurred_at || 0).getTime();
+    if (!batteries[event.source] || stamp > batteries[event.source].stamp) {
+      batteries[event.source] = {value: Number(value), stamp};
+    }
+  });
+  if (tracking && tracking.last_location && tracking.last_location.battery_percent != null) {
+    const stamp = new Date(tracking.last_location.recorded_at || tracking.created_at || 0).getTime();
+    if (!batteries.phone || stamp >= batteries.phone.stamp) batteries.phone = {value: Number(tracking.last_location.battery_percent), stamp};
+  }
+  const batteryItems = Object.entries(batteries).filter(([, item]) => Number.isFinite(item.value));
+  const batteryDetail = batteryItems.map(([kind, item]) => `${DEVICE_LABELS[kind] || kind} ${item.value}%`).join(' · ');
+  const lowestBattery = batteryItems.length ? Math.min(...batteryItems.map(([, item]) => item.value)) : null;
+
+  const cameraAge = camera ? minutesAgo(camera.last_frame_at) : null;
+  const heartbeat = [newest, cameraAge].filter(value => value != null);
+  const newestHeartbeat = heartbeat.length ? Math.min(...heartbeat) : null;
+  const lastEvent = latestStamp(allEvents.map(event => event.created_at || event.occurred_at));
+  const lastEventAge = lastEvent ? minutesAgo(lastEvent.value) : null;
+
+  const lastAlert = allEvents
+    .filter(event => event && event.metadata && (event.metadata.delivery_status || event.metadata.family_alert_status || event.metadata.alert_status)
+      && ['episode', 'help_request', 'hazard'].includes(event.kind))
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
+  const alertStatus = lastAlert
+    ? (lastAlert.metadata.family_alert_status || lastAlert.metadata.delivery_status || lastAlert.metadata.alert_status)
+    : null;
+
+  const cards = [
+    (() => {
+      if (!batteryItems.length) return healthCard('Batería', 'Sin dato', 'Ningún dispositivo ha enviado su batería todavía.', 'neutral');
+      const tone = lowestBattery < 20 ? 'bad' : lowestBattery < 40 ? 'warn' : 'good';
+      return healthCard('Batería', `${lowestBattery}%`, batteryDetail, tone);
+    })(),
+    healthCard(
+      'Última conexión',
+      knownAges.length ? timeAgoText(newest) : 'Sin conexión',
+      ages.map(item => `${DEVICE_LABELS[item.kind] || item.kind}: ${timeAgoText(item.minutes)}`).join(' · '),
+      knownAges.length ? toneForAge(newest, 15, 30) : 'bad',
+    ),
+    (() => {
+      if (!camera) return healthCard('Estado de la cámara', 'Sin cámara', 'No hay ninguna cámara configurada.', 'neutral');
+      const tone = camera.online && (cameraAge == null || cameraAge < 10) ? 'good' : cameraAge != null && cameraAge < 30 ? 'warn' : 'bad';
+      return healthCard('Estado de la cámara', camera.online ? 'En línea' : 'Sin señal', camera.last_frame_at ? `Última imagen ${timeAgoText(cameraAge)}.` : 'Sin imágenes registradas todavía.', tone);
+    })(),
+    healthCard(
+      'Calidad de conexión',
+      newestHeartbeat == null ? 'Sin datos' : newestHeartbeat < 5 ? 'Buena' : newestHeartbeat < 30 ? 'Irregular' : 'Mala',
+      newestHeartbeat == null ? 'Aún no hay latidos de dispositivos.' : `Último latido ${timeAgoText(newestHeartbeat)}.`,
+      newestHeartbeat == null ? 'neutral' : toneForAge(newestHeartbeat, 5, 30),
+    ),
+    healthCard(
+      'Última sincronización',
+      lastEvent ? timeAgoText(lastEventAge) : 'Sin eventos',
+      lastEvent ? `${allEvents.length} eventos cargados en el panel.` : 'Todavía no se ha sincronizado ningún evento.',
+      lastEvent ? toneForAge(lastEventAge, 5, 30) : 'bad',
+    ),
+    healthCard(
+      'Errores de reconocimiento',
+      `${pending} por aclarar`,
+      pending ? 'Revisa las capturas pendientes en Personas por aclarar.' : 'No hay identificaciones pendientes.',
+      pending === 0 ? 'good' : pending <= 2 ? 'warn' : 'bad',
+    ),
+    (() => {
+      if (!(contacts || []).length) return healthCard('Estado de los avisos', 'Sin destinatarios', 'Añade contactos en la pestaña Cuidados.', 'warn');
+      if (alertStatus) {
+        const label = {sent: 'Entregado', failed: 'Fallido', test_mode: 'Modo prueba', pending: 'Pendiente'}[alertStatus] || alertStatus;
+        const tone = alertStatus === 'sent' ? 'good' : alertStatus === 'failed' ? 'bad' : 'warn';
+        return healthCard('Estado de los avisos', label, `Último aviso ${timeAgoText(minutesAgo(lastAlert.created_at))} · ${activeContacts.length} contacto(s) con avisos activos.`, tone);
+      }
+      return healthCard(
+        'Estado de los avisos',
+        activeContacts.length ? 'Preparados' : 'Sin avisos',
+        activeContacts.length ? `${activeContacts.length} contacto(s) listos para recibir avisos.` : 'Ningún contacto tiene avisos y consentimiento activos.',
+        activeContacts.length ? 'good' : 'warn',
+      );
+    })(),
+  ];
+
+  const toneCount = cards.reduce((acc, card) => {
+    const tone = ['good', 'warn', 'bad', 'neutral'].find(value => card.classList.contains(`health-card--${value}`)) || 'neutral';
+    acc[tone] = (acc[tone] || 0) + 1;
+    return acc;
+  }, {});
+  const overallTone = toneCount.bad ? 'bad' : toneCount.warn ? 'warn' : 'good';
+  const overall = document.createElement('div');
+  overall.className = `health-overall health-overall--${overallTone}`;
+  const overallTitle = document.createElement('strong');
+  overallTitle.textContent = overallTone === 'good'
+    ? 'Faro está funcionando correctamente.'
+    : overallTone === 'warn'
+      ? `Faro funciona con ${toneCount.warn} indicador(es) a vigilar.`
+      : `Revisa ${toneCount.bad} indicador(es) de Faro.`;
+  const overallDetail = document.createElement('p');
+  overallDetail.textContent = `Comprobado a las ${new Date().toLocaleTimeString()}. Los semáforos usan la última actividad real de cada dispositivo.`;
+  overall.append(overallTitle, overallDetail);
+  const grid = document.createElement('div');
+  grid.className = 'health-grid';
+  grid.append(...cards);
+  target.append(overall, grid);
 }
 
 async function load() {
-  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos', 'transmisiones', 'panel longitudinal', 'patrulla', 'uso de cámara'];
+  const labels = ['personas', 'personas por aclarar', 'cuidados', 'paciente', 'memoria', 'ubicación', 'ejercicios', 'resumen de ejercicios', 'agenda', 'estadísticas', 'dispositivos', 'transmisiones', 'panel longitudinal', 'patrulla', 'uso de cámara', 'rastreadores'];
   const requests = [
     api('/v1/people'), api('/v1/reviews'), api('/v1/care-contacts'), api('/v1/patient-profile'),
     api('/v1/events?limit=500'), api('/v1/location-sessions/active'),
@@ -213,6 +397,7 @@ async function load() {
     api('/v1/stats/longitudinal?days=30'),
     api('/v1/camera/patrol'),
     api('/v1/camera/usage'),
+    api('/v1/trackers'),
   ];
   const settled = await Promise.allSettled(requests);
   const failed = [];
@@ -237,6 +422,7 @@ async function load() {
   const longitudinal = pick(12);
   const patrol = pick(13) || {};
   const cameraUsage = pick(14);
+  const trackers = pick(15) || [];
 
   const pending = reviews.filter(review => review.status === 'pending');
   document.querySelector('#people-count').textContent = people.length;
@@ -257,7 +443,8 @@ async function load() {
 
   if (patient) { fillPatient(patient); await renderPatientPhoto(patient); }
   renderCareContacts(contacts, people);
-  renderDevices(devices, liveViews);
+  renderHealth({inventory: devices, tracking, reviews, contacts, events});
+  renderDevices(devices, liveViews, trackers);
   renderPatrol(patrol, cameraUsage);
   renderCameraEye();
   populateKnownPersonOptions(people);
@@ -933,7 +1120,196 @@ function renderPeople(people) {
   if (!people.length) target.append(empty('Aún no hay personas conocidas. Añade la primera para comenzar.'));
 }
 
-function renderDevices(inventory, liveViews) {
+const DEVICE_LABELS = {glasses: 'Gafas', phone: 'Móvil', portal: 'Portal', backend: 'Servicio'};
+const DEVICE_ROLE_LABELS = {family: 'Familiar', caregiver: 'Cuidador', clinician: 'Profesional sanitario'};
+const DEVICE_VIEW_LABELS = {pending: 'Pendiente', active: 'Activa', completed: 'Terminada', cancelled: 'Cancelada', denied: 'Denegada'};
+
+function deviceSection(title, hint) {
+  const section = document.createElement('section');
+  section.className = 'device-group';
+  const heading = document.createElement('div');
+  heading.className = 'device-group-heading';
+  const headingTitle = document.createElement('h3');
+  headingTitle.className = 'section-title';
+  headingTitle.textContent = title;
+  heading.append(headingTitle);
+  if (hint) {
+    const text = document.createElement('p');
+    text.className = 'device-group-hint';
+    text.textContent = hint;
+    heading.append(text);
+  }
+  const body = document.createElement('div');
+  body.className = 'device-grid';
+  section.append(heading, body);
+  return {section, body};
+}
+
+function deviceSource(inventory, kind) {
+  return (inventory.sources || []).find(source => source.source === kind)
+    || {source: kind, events_24h: 0, last_event_at: null};
+}
+
+function deviceSettings(inventory, kind) {
+  return (inventory.settings || []).find(item => item.source === kind)
+    || {source: kind, microphone: false, camera: false, location: false, tracking: false};
+}
+
+function deviceOnline(source) {
+  return Boolean(source.last_event_at && Date.now() - new Date(source.last_event_at).getTime() < 15 * 60 * 1000);
+}
+
+function statusChip(online, onlineText = 'En línea', offlineText = 'Sin actividad reciente') {
+  const chip = document.createElement('span');
+  chip.className = 'device-status ' + (online ? 'is-online' : 'is-offline');
+  chip.textContent = online ? onlineText : offlineText;
+  return chip;
+}
+
+function testConnectionButton(kind) {
+  const output = document.createElement('output');
+  output.className = 'device-test';
+  output.setAttribute('aria-live', 'polite');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary';
+  button.textContent = 'Probar conexión';
+  button.onclick = async () => {
+    button.disabled = true;
+    output.textContent = 'Probando…';
+    try {
+      const result = await api('/v1/devices/connection-test', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({device: kind})});
+      output.textContent = (result.online ? 'Conexión correcta' : 'Sin conexión') + ` · ${result.detail} · ${result.latency_ms} ms`;
+      toast(result.online ? `${result.label}: conexión correcta.` : `${result.label}: ${result.detail}.`, result.online ? 'success' : 'error');
+    } catch (error) {
+      output.textContent = 'No se pudo probar la conexión.';
+      notify(error);
+    } finally {
+      button.disabled = false;
+    }
+  };
+  return {button, output};
+}
+
+function permissionsForm(kind, settings) {
+  const form = document.createElement('form');
+  form.className = 'device-permissions';
+  const legend = document.createElement('p');
+  legend.className = 'device-subtitle';
+  legend.textContent = 'Permisos del dispositivo';
+  const grid = document.createElement('div');
+  grid.className = 'permission-grid';
+  const inputs = {};
+  [['microphone', 'Micrófono'], ['camera', 'Cámara'], ['location', 'Ubicación'], ['tracking', 'Seguimiento']].forEach(([name, label]) => {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'check permission-item';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.name = name;
+    input.checked = Boolean(settings[name]);
+    const span = document.createElement('span');
+    span.textContent = label;
+    wrapper.append(input, span);
+    grid.append(wrapper);
+    inputs[name] = input;
+  });
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'secondary';
+  save.textContent = 'Guardar permisos';
+  form.append(legend, grid, save);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      await api(`/v1/devices/sources/${kind}/settings`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+        microphone: inputs.microphone.checked,
+        camera: inputs.camera.checked,
+        location: inputs.location.checked,
+        tracking: inputs.tracking.checked,
+      })});
+      toast('Permisos guardados.', 'success');
+      await load();
+    } catch (error) { notify(error); } finally { save.disabled = false; }
+  };
+  return form;
+}
+
+function liveViewButton(kind, inventory) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'primary';
+  button.textContent = 'Ver en directo';
+  button.setAttribute('aria-label', 'Solicitar transmisión en directo');
+  button.disabled = !inventory.video_consent;
+  button.title = inventory.video_consent ? 'Solicitar transmisión en directo' : 'Activa el consentimiento de vídeo primero';
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      await api('/v1/live-views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({source: kind, reason: 'Petición desde Faro Familia'})});
+      toast('Solicitud registrada y auditada. El vídeo en directo llegará en la fase 3.', 'success');
+      await load();
+    } catch (error) { notify(error); } finally { button.disabled = false; }
+  };
+  return button;
+}
+
+function sourceCard(kind, inventory, options = {}) {
+  const source = deviceSource(inventory, kind);
+  const card = document.createElement('article');
+  card.className = 'device-card device-card--' + kind;
+  const head = document.createElement('div');
+  head.className = 'device-card-head';
+  const title = document.createElement('strong');
+  title.textContent = DEVICE_LABELS[kind] || kind;
+  head.append(title, statusChip(deviceOnline(source), options.onlineText, options.offlineText));
+  const last = document.createElement('p');
+  last.className = 'device-meta';
+  last.textContent = source.last_event_at
+    ? `Última actividad: ${new Date(source.last_event_at).toLocaleString()}`
+    : 'Sin actividad registrada';
+  const count = document.createElement('p');
+  count.className = 'device-meta';
+  count.textContent = `${source.events_24h} evento(s) en 24 h`;
+  card.append(head, last, count);
+  if (options.permissions) card.append(permissionsForm(kind, deviceSettings(inventory, kind)));
+  const actions = document.createElement('div');
+  actions.className = 'device-actions';
+  const {button, output} = testConnectionButton(kind);
+  actions.append(button);
+  if (kind === 'glasses' || kind === 'phone') actions.append(liveViewButton(kind, inventory));
+  card.append(actions, output);
+  return card;
+}
+
+function cameraCard(inventory) {
+  const camera = (inventory.cameras || [])[0];
+  const card = document.createElement('article');
+  card.className = 'device-card device-card--camera';
+  const head = document.createElement('div');
+  head.className = 'device-card-head';
+  const title = document.createElement('strong');
+  title.textContent = 'Ojo de Faro';
+  head.append(title, statusChip(Boolean(camera && camera.online), 'En línea', 'Sin señal'));
+  const meta = document.createElement('p');
+  meta.className = 'device-meta';
+  meta.textContent = `${camera && camera.name ? camera.name : 'Cámara Tapo'} · ${camera && camera.location ? camera.location : 'Casa'}`
+    + (camera && camera.last_frame_at ? ` · última imagen: ${new Date(camera.last_frame_at).toLocaleString()}` : ' · sin imágenes todavía');
+  const actions = document.createElement('div');
+  actions.className = 'device-actions';
+  const {button, output} = testConnectionButton('camera');
+  actions.append(button);
+  const body = document.createElement('div');
+  body.id = 'device-camera-body';
+  body.className = 'device-camera-body';
+  const patrol = document.createElement('div');
+  patrol.id = 'device-camera-patrol';
+  patrol.className = 'device-camera-patrol';
+  card.append(head, meta, actions, output, body, patrol);
+  return card;
+}
+
+function renderDevices(inventory, liveViews, trackers) {
   const target = document.querySelector('#devices');
   if (!target) return;
   target.replaceChildren();
@@ -941,51 +1317,71 @@ function renderDevices(inventory, liveViews) {
     target.append(empty('No se pudo cargar el inventario de dispositivos.'));
     return;
   }
-  const labels = {glasses: 'Gafas', phone: 'Móvil', portal: 'Portal', backend: 'Servicio'};
-  inventory.sources.forEach(source => {
-    const card = document.createElement('article'); card.className = 'device-card';
-    const title = document.createElement('strong'); title.textContent = labels[source.source] || source.source;
-    const state = document.createElement('p');
-    state.textContent = source.last_event_at
-      ? `Última actividad: ${new Date(source.last_event_at).toLocaleString()} · ${source.events_24h} evento(s) en 24 h`
-      : 'Sin actividad en las últimas 24 h';
-    card.append(title, state);
-    target.append(card);
-  });
-  inventory.devices.forEach(device => {
-    const card = document.createElement('article'); card.className = 'device-card';
-    const title = document.createElement('strong'); title.textContent = `Dispositivo autorizado · ${device.role}`;
-    const meta = document.createElement('p');
-    meta.textContent = `Desde el ${new Date(device.created_at).toLocaleDateString()}${device.revoked ? ' · revocado' : ''}`;
-    card.append(title, meta);
-    target.append(card);
-  });
 
-  const sectionTitle = text => {
-    const node = document.createElement('h3');
-    node.className = 'section-title';
-    node.textContent = text;
-    return node;
-  };
-  target.append(sectionTitle('Cámara (ojo)'));
-  (inventory.cameras || []).forEach(camera => {
-    const card = document.createElement('article'); card.className = 'device-card';
-    const title = document.createElement('strong'); title.textContent = camera.name;
+  const cameraOnline = Boolean((inventory.cameras || [])[0] && (inventory.cameras || [])[0].online);
+  const onlineCount = ['glasses', 'phone', 'portal'].filter(kind => deviceOnline(deviceSource(inventory, kind))).length + (cameraOnline ? 1 : 0);
+  const summary = document.querySelector('#device-summary');
+  if (summary) {
+    summary.textContent = `${onlineCount} de 4 dispositivos en línea · actualizado a las ${new Date().toLocaleTimeString()}`;
+  }
+
+  const hardware = deviceSection('Dispositivos', 'Estado, permisos y acciones de cada dispositivo real de la casa.');
+  hardware.body.append(sourceCard('glasses', inventory, {permissions: true}));
+  hardware.body.append(sourceCard('phone', inventory, {permissions: true}));
+  hardware.body.append(cameraCard(inventory));
+  hardware.body.append(sourceCard('portal', inventory, {permissions: true}));
+  hardware.body.append(sourceCard('backend', inventory, {onlineText: 'Servicio activo', offlineText: 'Sin actividad'}));
+  target.append(hardware.section);
+
+  const access = deviceSection('Accesos autorizados', 'Cada código de emparejamiento crea una credencial con un rol. Revócala cuando deje de usarse.');
+  (inventory.devices || []).forEach(device => {
+    const card = document.createElement('article');
+    card.className = 'device-card device-card--access';
+    const head = document.createElement('div');
+    head.className = 'device-card-head';
+    const title = document.createElement('strong');
+    title.textContent = DEVICE_ROLE_LABELS[device.role] || device.role;
+    head.append(title, statusChip(!device.revoked, 'Activo', 'Revocado'));
     const meta = document.createElement('p');
-    const state = camera.online ? 'En línea' : 'Sin señal';
-    const last = camera.last_frame_at ? ' · última imagen: ' + new Date(camera.last_frame_at).toLocaleString() : '';
-    meta.textContent = 'Cámara (ojo) · ' + (camera.location || 'Casa') + ' · ' + state + last;
-    card.append(title, meta);
-    target.append(card);
+    meta.className = 'device-meta';
+    meta.textContent = `Emparejado el ${new Date(device.created_at).toLocaleDateString()}`;
+    card.append(head, meta);
+    if (!device.revoked) {
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'text-danger';
+      revoke.textContent = 'Revocar acceso';
+      revoke.onclick = async () => {
+        if (!(await confirmAction(`¿Revocar el acceso de ${DEVICE_ROLE_LABELS[device.role] || device.role}? Dejará de poder entrar con esa credencial.`, 'Revocar acceso'))) return;
+        revoke.disabled = true;
+        try {
+          await api(`/v1/devices/${device.id}/revoke`, {method: 'POST'});
+          toast('Acceso revocado.', 'success');
+          await load();
+        } catch (error) { notify(error); } finally { revoke.disabled = false; }
+      };
+      card.append(revoke);
+    }
+    access.body.append(card);
   });
-  target.append(sectionTitle('Privacidad y consentimiento'));
-  const consent = document.createElement('article'); consent.className = 'device-card';
-  const consentTitle = document.createElement('strong'); consentTitle.textContent = 'Vídeo en directo';
+  if (!access.body.children.length) access.body.append(empty('Todavía no hay accesos emparejados. Usa «Emparejar dispositivo».'));
+  target.append(access.section);
+
+  const privacy = deviceSection('Privacidad y consentimiento', 'El vídeo en directo solo se puede solicitar con consentimiento activo y queda auditado.');
+  const consent = document.createElement('article');
+  consent.className = 'device-card device-card--consent';
+  const consentHead = document.createElement('div');
+  consentHead.className = 'device-card-head';
+  const consentTitle = document.createElement('strong');
+  consentTitle.textContent = 'Vídeo en directo';
+  consentHead.append(consentTitle, statusChip(Boolean(inventory.video_consent), 'Consentimiento activo', 'Sin consentimiento'));
   const consentText = document.createElement('p');
+  consentText.className = 'device-meta';
   consentText.textContent = inventory.video_consent
-    ? 'Consentimiento activo: se pueden solicitar transmisiones.'
-    : 'Sin consentimiento: actívalo para solicitar transmisiones.';
+    ? 'Puedes solicitar transmisiones de las gafas o del móvil.'
+    : 'Actívalo para poder solicitar transmisiones de las gafas o del móvil.';
   const consentButton = document.createElement('button');
+  consentButton.type = 'button';
   consentButton.className = inventory.video_consent ? 'secondary' : 'primary';
   consentButton.textContent = inventory.video_consent ? 'Retirar consentimiento' : 'Activar consentimiento';
   consentButton.onclick = async () => {
@@ -996,36 +1392,28 @@ function renderDevices(inventory, liveViews) {
       await load();
     } catch (error) { notify(error); } finally { consentButton.disabled = false; }
   };
-  consent.append(consentTitle, consentText, consentButton);
-  target.append(consent);
+  consent.append(consentHead, consentText, consentButton);
+  privacy.body.append(consent);
+  target.append(privacy.section);
 
-  ['glasses', 'phone'].forEach(kind => {
-    const card = document.createElement('article'); card.className = 'device-card';
-    const title = document.createElement('strong'); title.textContent = `Transmisión · ${labels[kind] || kind}`;
-    const hint = document.createElement('p');
-    hint.textContent = inventory.video_consent ? 'Solicita una vista en directo cuando lo necesites.' : 'Requiere consentimiento de vídeo.';
-    const button = document.createElement('button'); button.className = 'primary'; button.textContent = 'Solicitar transmisión';
-    button.disabled = !inventory.video_consent;
-    button.onclick = async () => {
-      button.disabled = true;
-      try {
-        await api('/v1/live-views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({source: kind, reason: 'Petición desde Faro Familia'})});
-        toast('Solicitud registrada y auditada. El vídeo en directo llegará en la fase 3.', 'success');
-        await load();
-      } catch (error) { notify(error); } finally { button.disabled = false; }
-    };
-    card.append(title, hint, button);
-    target.append(card);
-  });
-
+  const transmissions = deviceSection('Transmisiones', 'Solicitudes de vídeo en directo registradas y auditadas.');
   (liveViews || []).forEach(view => {
-    const card = document.createElement('article'); card.className = 'device-card';
-    const title = document.createElement('strong'); title.textContent = `Solicitud · ${labels[view.source] || view.source}`;
+    const card = document.createElement('article');
+    card.className = 'device-card device-card--live';
+    const head = document.createElement('div');
+    head.className = 'device-card-head';
+    const title = document.createElement('strong');
+    title.textContent = DEVICE_LABELS[view.source] || view.source;
+    head.append(title, statusChip(view.status === 'active' || view.status === 'pending', DEVICE_VIEW_LABELS[view.status] || view.status, DEVICE_VIEW_LABELS[view.status] || view.status));
     const meta = document.createElement('p');
-    meta.textContent = `${view.status} · ${new Date(view.created_at).toLocaleString()}`;
-    card.append(title, meta);
+    meta.className = 'device-meta';
+    meta.textContent = new Date(view.created_at).toLocaleString();
+    card.append(head, meta);
     if (view.status === 'pending' || view.status === 'active') {
-      const cancel = document.createElement('button'); cancel.className = 'secondary'; cancel.textContent = 'Cancelar';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'secondary';
+      cancel.textContent = 'Cancelar solicitud';
       cancel.onclick = async () => {
         cancel.disabled = true;
         try {
@@ -1036,10 +1424,31 @@ function renderDevices(inventory, liveViews) {
       };
       card.append(cancel);
     }
-    target.append(card);
+    transmissions.body.append(card);
   });
+  if (!transmissions.body.children.length) transmissions.body.append(empty('Sin solicitudes de transmisión.'));
+  target.append(transmissions.section);
 
-  if (!target.children.length) target.append(empty('Todavía no hay dispositivos autorizados.'));
+  const trackerSection = deviceSection('Rastreadores', 'Objetos con localizador (llaves, cartera…) y su último estado conocido.');
+  const trackerLabels = {keys: 'Llaves', wallet: 'Cartera', bag: 'Bolso', other: 'Objeto'};
+  const trackerStatus = {near: 'Cerca', far: 'Lejos', lost: 'Perdido', home: 'En casa', unknown: 'Sin estado'};
+  (trackers || []).forEach(tracker => {
+    const card = document.createElement('article');
+    card.className = 'device-card device-card--tracker';
+    const head = document.createElement('div');
+    head.className = 'device-card-head';
+    const title = document.createElement('strong');
+    title.textContent = tracker.name;
+    head.append(title, statusChip(tracker.status === 'near' || tracker.status === 'home', trackerStatus[tracker.status] || tracker.status, trackerStatus[tracker.status] || tracker.status));
+    const meta = document.createElement('p');
+    meta.className = 'device-meta';
+    meta.textContent = `${trackerLabels[tracker.kind] || tracker.kind}${tracker.place ? ` · ${tracker.place}` : ''}`
+      + (tracker.last_seen_at ? ` · visto ${new Date(tracker.last_seen_at).toLocaleString()}` : '');
+    card.append(head, meta);
+    trackerSection.body.append(card);
+  });
+  if (!trackerSection.body.children.length) trackerSection.body.append(empty('Sin rastreadores vinculados. Se gestionan con la API de rastreadores.'));
+  target.append(trackerSection.section);
 }
 
 async function renderReviews(reviews, people) {
@@ -1243,6 +1652,37 @@ document.querySelector('#event-prev-day').onclick = () => shiftMemoryDay(-1);
 document.querySelector('#event-next-day').onclick = () => shiftMemoryDay(1);
 document.querySelector('#event-today').onclick = () => { memoryDay = ''; document.querySelector('#event-date').value = ''; refreshMemoryDay(); };
 document.querySelector('#pair').onclick = async () => { try { const invite = await api('/v1/pairing-invites', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({role: document.querySelector('#pair-role').value})}); document.querySelector('#pair-code').textContent = invite.code; toast('Código creado. Caduca en 10 minutos.', 'success'); } catch (error) { notify(error); } };
+
+const devicePairDialog = document.querySelector('#pair-dialog');
+const devicePairCode = document.querySelector('#device-pair-code');
+const devicePairStatus = document.querySelector('#device-pair-status');
+const devicePairCopy = document.querySelector('#device-pair-copy');
+const devicesRefresh = document.querySelector('#devices-refresh');
+if (devicesRefresh) devicesRefresh.addEventListener('click', () => load());
+const devicePairOpen = document.querySelector('#device-pair');
+if (devicePairOpen) devicePairOpen.addEventListener('click', () => {
+  if (devicePairCode) devicePairCode.textContent = '';
+  if (devicePairStatus) devicePairStatus.textContent = '';
+  if (devicePairCopy) devicePairCopy.hidden = true;
+  if (devicePairDialog && typeof devicePairDialog.showModal === 'function') devicePairDialog.showModal();
+});
+const devicePairCreate = document.querySelector('#device-pair-create');
+if (devicePairCreate) devicePairCreate.addEventListener('click', async () => {
+  devicePairCreate.disabled = true;
+  try {
+    const invite = await api('/v1/pairing-invites', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({role: document.querySelector('#device-pair-role').value})});
+    if (devicePairCode) devicePairCode.textContent = invite.code;
+    if (devicePairStatus) devicePairStatus.textContent = `Válido hasta las ${new Date(invite.expires_at).toLocaleTimeString()}`;
+    if (devicePairCopy) devicePairCopy.hidden = false;
+    toast('Código creado. Caduca en 10 minutos.', 'success');
+  } catch (error) { notify(error); } finally { devicePairCreate.disabled = false; }
+});
+if (devicePairCopy) devicePairCopy.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(devicePairCode.textContent || ''); toast('Código copiado.', 'success'); }
+  catch { notify(new Error('No se pudo copiar. Selecciona el código a mano.')); }
+});
+const devicePairClose = document.querySelector('#device-pair-close');
+if (devicePairClose) devicePairClose.addEventListener('click', () => { if (devicePairDialog) devicePairDialog.close(); });
 
 /* ------------------------------ Voz / chat ------------------------------ */
 

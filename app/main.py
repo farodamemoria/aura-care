@@ -961,12 +961,43 @@ class SourceActivity(BaseModel):
     events_24h: int = 0
 
 
+class DeviceSettings(BaseModel):
+    source: str
+    microphone: bool = False
+    camera: bool = False
+    location: bool = False
+    tracking: bool = False
+    updated_at: Optional[datetime] = None
+
+
+class DeviceSettingsUpdate(BaseModel):
+    microphone: bool
+    camera: bool
+    location: bool
+    tracking: bool
+
+
+class DeviceConnectionTestRequest(BaseModel):
+    device: str = Field(pattern="^(glasses|phone|portal|backend|camera)$")
+
+
+class DeviceConnectionTest(BaseModel):
+    device: str
+    label: str
+    online: bool
+    checked_at: datetime
+    detail: str
+    latency_ms: int
+    last_activity_at: Optional[datetime] = None
+
+
 class DeviceInventory(BaseModel):
     devices: list[DeviceInventoryItem]
     sources: list[SourceActivity]
     video_consent: bool = False
     updated_at: datetime
     cameras: list[CameraInventoryItem] = Field(default_factory=list)
+    settings: list[DeviceSettings] = Field(default_factory=list)
 
 
 class VideoConsentUpdate(BaseModel):
@@ -1259,6 +1290,18 @@ class RekognitionFaceProvider:
             self.client.delete_faces(CollectionId=self.collection_id, FaceIds=face_ids)
 
 
+DEVICE_SOURCE_DEFAULTS: dict[str, tuple[bool, bool, bool, bool]] = {
+    "glasses": (True, True, True, True),
+    "phone": (True, True, True, True),
+    "portal": (True, False, False, False),
+    "backend": (False, False, False, False),
+}
+DEVICE_LABELS = {
+    "glasses": "Gafas", "phone": "Móvil", "portal": "Portal",
+    "backend": "Servicio", "camera": "Ojo de Faro",
+}
+
+
 class InMemoryRepository:
     """Development repository. DynamoDB replaces it in AWS."""
 
@@ -1328,6 +1371,10 @@ class InMemoryRepository:
             role TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT
         )""")
         self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_device_credentials_token ON device_credentials(token_hash)")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS device_settings (
+            source TEXT PRIMARY KEY, microphone INTEGER NOT NULL, camera INTEGER NOT NULL,
+            location INTEGER NOT NULL, tracking INTEGER NOT NULL, updated_at TEXT NOT NULL
+        )""")
         self.event_db.execute("""CREATE TABLE IF NOT EXISTS memories (
             id TEXT PRIMARY KEY, person_id TEXT, kind TEXT NOT NULL,
             summary TEXT NOT NULL, created_at TEXT NOT NULL
@@ -1716,6 +1763,86 @@ class InMemoryRepository:
             )
             self.event_db.commit()
 
+    def device_settings(self) -> list[DeviceSettings]:
+        """KAN-180: permisos configurables por dispositivo (microfono, camara, ubicacion, seguimiento)."""
+        with self.lock:
+            rows = self.event_db.execute(
+                "SELECT source, microphone, camera, location, tracking, updated_at FROM device_settings"
+            ).fetchall()
+        stored = {row["source"]: row for row in rows}
+        settings: list[DeviceSettings] = []
+        for source, (microphone, camera, location, tracking) in DEVICE_SOURCE_DEFAULTS.items():
+            row = stored.get(source)
+            settings.append(DeviceSettings(
+                source=source,
+                microphone=bool(row["microphone"]) if row else microphone,
+                camera=bool(row["camera"]) if row else camera,
+                location=bool(row["location"]) if row else location,
+                tracking=bool(row["tracking"]) if row else tracking,
+                updated_at=(datetime.fromisoformat(row["updated_at"]) if row else None),
+            ))
+        return settings
+
+    def set_device_settings(self, source: str, update: DeviceSettingsUpdate) -> DeviceSettings:
+        if source not in DEVICE_SOURCE_DEFAULTS:
+            raise ValueError(f"Unknown device source: {source}")
+        moment = now()
+        with self.lock:
+            self.event_db.execute(
+                "INSERT OR REPLACE INTO device_settings(source, microphone, camera, location, tracking, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (source, int(update.microphone), int(update.camera), int(update.location), int(update.tracking), moment.isoformat()),
+            )
+            self.event_db.commit()
+        return DeviceSettings(source=source, updated_at=moment, **update.model_dump())
+
+    def revoke_device_credential(self, device_id: str) -> bool:
+        """KAN-180: revoca un acceso autorizado (emparejamiento) de forma auditada."""
+        with self.lock:
+            cursor = self.event_db.execute(
+                "UPDATE device_credentials SET revoked_at=? WHERE id=? AND revoked_at IS NULL",
+                (now().isoformat(), device_id),
+            )
+            self.event_db.commit()
+            return cursor.rowcount == 1
+
+    def device_connection_test(self, device: str) -> DeviceConnectionTest:
+        """KAN-180: prueba real de conexion usando la ultima actividad registrada."""
+        started = now()
+        last_activity: Optional[datetime] = None
+        label = DEVICE_LABELS.get(device, device)
+        if device == "camera":
+            last_activity = _LAST_CAMERA_FRAME.get("at")
+            online = bool(last_activity and (now() - last_activity) < timedelta(minutes=5))
+            if last_activity:
+                minutes = max(0, int((now() - last_activity).total_seconds() // 60))
+                detail = f"Última imagen hace {minutes} min" if online else f"Sin imagen reciente ({minutes} min)"
+            else:
+                detail = "Sin imágenes registradas todavía"
+        else:
+            if device not in DEVICE_SOURCE_DEFAULTS:
+                raise ValueError(f"Unknown device: {device}")
+            with self.lock:
+                row = self.event_db.execute(
+                    "SELECT MAX(created_at) AS last_at, COUNT(*) AS total FROM events WHERE source=?",
+                    (device,),
+                ).fetchone()
+            last_activity = datetime.fromisoformat(row["last_at"]) if row and row["last_at"] else None
+            total = int(row["total"]) if row else 0
+            online = bool(last_activity and (now() - last_activity) < timedelta(minutes=15))
+            if last_activity:
+                minutes = max(0, int((now() - last_activity).total_seconds() // 60))
+                detail = f"{total} evento(s); última actividad hace {minutes} min"
+            elif device == "backend":
+                detail = "Servicio accesible, sin eventos registrados"
+            else:
+                detail = "Sin actividad registrada todavía"
+        elapsed_ms = max(1, int((now() - started).total_seconds() * 1000))
+        return DeviceConnectionTest(
+            device=device, label=label, online=online, checked_at=now(),
+            detail=detail, latency_ms=elapsed_ms, last_activity_at=last_activity,
+        )
+
     def device_inventory(self) -> DeviceInventory:
         """KAN-75 Fase 1: inventario de dispositivos autorizados + actividad por canal."""
         with self.lock:
@@ -1771,7 +1898,7 @@ class InMemoryRepository:
         ]
         return DeviceInventory(
             devices=devices, sources=sources, video_consent=consent, updated_at=now(),
-            cameras=cameras,
+            cameras=cameras, settings=self.device_settings(),
         )
 
     def update_event_metadata(self, event_id: UUID, extra: dict) -> None:
@@ -5495,6 +5622,53 @@ def list_devices(authorization: Optional[str] = Header(default=None)) -> DeviceI
     """KAN-75 Fase 1: inventario de dispositivos autorizados y actividad reciente por canal."""
     require_auth(authorization)
     return repository.device_inventory()
+
+
+@app.put("/v1/devices/sources/{source}/settings", response_model=DeviceInventory)
+def update_device_source_settings(
+    source: str, request: DeviceSettingsUpdate, authorization: Optional[str] = Header(default=None),
+) -> DeviceInventory:
+    """KAN-180: permisos por dispositivo (microfono, camara, ubicacion y seguimiento)."""
+    require_auth(authorization)
+    if source not in DEVICE_SOURCE_DEFAULTS:
+        raise HTTPException(status_code=422, detail="Unknown device source")
+    repository.set_device_settings(source, request)
+    repository.add_event(EventCreate(
+        kind="caregiver_action",
+        summary=f"Permisos de {DEVICE_LABELS.get(source, source)} actualizados",
+        source="portal",
+        severity="info",
+        metadata={"action": "device_settings", "device": source, **request.model_dump()},
+    ))
+    return repository.device_inventory()
+
+
+@app.post("/v1/devices/{device_id}/revoke", response_model=DeviceInventory)
+def revoke_device_credential(
+    device_id: str, authorization: Optional[str] = Header(default=None),
+) -> DeviceInventory:
+    """KAN-180: revoca un acceso autorizado del circulo de cuidado."""
+    require_auth(authorization)
+    if not repository.revoke_device_credential(device_id):
+        raise HTTPException(status_code=404, detail="Device credential not found or already revoked")
+    repository.add_event(EventCreate(
+        kind="caregiver_action", summary="Acceso de dispositivo revocado",
+        source="portal", severity="info",
+        metadata={"action": "revoke_device", "device_id": device_id},
+    ))
+    return repository.device_inventory()
+
+
+@app.post("/v1/devices/connection-test", response_model=DeviceConnectionTest)
+def test_device_connection(
+    request: DeviceConnectionTestRequest, authorization: Optional[str] = Header(default=None),
+) -> DeviceConnectionTest:
+    """KAN-180: prueba de conexion con evidencia real (ultima actividad o ultima imagen)."""
+    require_auth(authorization)
+    try:
+        return repository.device_connection_test(request.device)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/trackers", response_model=list[Tracker])
