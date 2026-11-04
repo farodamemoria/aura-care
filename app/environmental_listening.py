@@ -237,10 +237,15 @@ class EnvironmentalListeningEngine:
 
     def _start_episode(self, signal: str, at: datetime, confidence: float,
                        reason: str = "repetition") -> dict:
+        # KAN-207: el episodio conserva las detecciones que lo dispararon para poder
+        # describir el aviso ("tos, 3 detecciones") en lugar de perderlas.
+        detections = [item for item in self._recent if item.signal == signal]
+        if not detections:
+            detections = [Detection(signal=signal, confidence=confidence, at=at)]
         self._recent = []
         episode = Episode(
-            id=uuid4(), signal=signal, started_at=at, updated_at=at,
-            detections=[Detection(signal=signal, confidence=confidence, at=at)],
+            id=uuid4(), signal=signal, started_at=detections[0].at, updated_at=at,
+            detections=detections,
             status="awaiting_response", check_ins=1, question_asked_at=at,
         )
         self.active_episode = episode
@@ -253,16 +258,30 @@ class EnvironmentalListeningEngine:
         episode.explicit_help_request = explicit
         episode.updated_at = at
         label = ACOUSTIC_SIGNAL_LABELS.get(episode.signal, episode.signal)
+        occurrences = len(episode.detections)
+        occurrence_label = "1 detección" if occurrences == 1 else f"{occurrences} detecciones"
         if reason == "help_request":
-            message = f"Faro: el paciente pide ayuda después de detectar {label}."
+            description = (
+                f"posible {label} ({occurrence_label}); el paciente pide ayuda."
+            )
         elif reason == "no_response":
-            message = f"Faro: posible {label}; el paciente no responde a la comprobación."
+            description = (
+                f"posible {label} ({occurrence_label}); el paciente no responde a la comprobación."
+            )
         elif reason == "persistence":
-            message = f"Faro: {label} persistente después de preguntar si estaba bien."
+            description = (
+                f"posible {label} persistente ({occurrence_label}) tras preguntar si estaba bien."
+            )
         else:
-            message = f"Faro: respuesta poco clara tras detectar {label}."
+            description = (
+                f"posible {label} ({occurrence_label}); respuesta poco clara tras la comprobación."
+            )
+        message = f"Faro: {description}"
         escalation = {
             "kind": "hazard",
+            "alert_type": label,
+            "description": description,
+            "occurrences": occurrences,
             "spoken_message": message,
             "explicit_help_request": explicit,
             "signal": episode.signal,
