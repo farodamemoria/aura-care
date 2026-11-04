@@ -732,6 +732,7 @@ class OnboardingConfiguration(BaseModel):
 
 class EmergencyAlertCreate(BaseModel):
     kind: str = Field(pattern="^(episode|lost|hazard|medication|reminder)$")
+    alert_type: Optional[str] = Field(default=None, max_length=60)
     spoken_message: str = Field(min_length=1, max_length=500)
     explicit_help_request: bool
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
@@ -798,7 +799,8 @@ def build_alert_message(
         location += f" Seguimiento: {alert.tracking_url}"
     if not location and home_label:
         location = f" Domicilio del paciente: {home_label}."
-    return f"Alerta de Faro da Memoria. Tipo: {alert.kind}. {alert.spoken_message}{location}"
+    alert_type = alert.alert_type or alert.kind
+    return f"Alerta de Faro da Memoria. Tipo: {alert_type}. {alert.spoken_message}{location}"
 
 
 def prefer_location(new: LocationPoint, current: Optional[LocationPoint]) -> bool:
@@ -1249,7 +1251,7 @@ class MetaWhatsAppProvider:
                 "name": self.template_name,
                 "language": {"code": self.template_language},
                 "components": [{"type": "body", "parameters": [
-                    {"type": "text", "text": alert.kind},
+                    {"type": "text", "text": alert.alert_type or alert.kind},
                     {"type": "text", "text": alert.spoken_message + location + home_note},
                 ]}],
             },
@@ -2785,9 +2787,10 @@ def maybe_send_family_alert(event: Event) -> Optional[dict]:
     if not contacts:
         return {"alert_category": category or rule["id"], "family_alert_status": "no_contact"}
     repository.last_auto_alert[trigger_key] = now()
-    deliveries, failures = send_alert_to_contacts(contacts, EmergencyAlertCreate(
+    alert_request = resolve_alert_location(EmergencyAlertCreate(
         kind=alert_kind, spoken_message=alert_message, explicit_help_request=False,
     ))
+    deliveries, failures = send_alert_to_contacts(contacts, alert_request)
     status = "sent" if any(delivery.message_id for _, delivery in deliveries) else (
         "test_mode" if deliveries else "failed"
     )
@@ -3565,6 +3568,36 @@ def recent_device_location(max_age: timedelta = timedelta(minutes=10)) -> Option
     return location
 
 
+def resolve_alert_location(alert: EmergencyAlertCreate) -> EmergencyAlertCreate:
+    """KAN-207: todo aviso sale con ubicacion (GPS reciente, ultima conocida o domicilio)."""
+    if alert.latitude is not None and alert.longitude is not None:
+        return alert
+    recent = recent_device_location()
+    if recent is not None:
+        recent_recorded = recent.get("recorded_at")
+        recent_is_fresh = (
+            recent_recorded is not None
+            and now() - recent_recorded <= LOCATION_ANSWER_FRESH_AGE
+        )
+        return alert.model_copy(update={
+            "latitude": recent["latitude"], "longitude": recent["longitude"],
+            "location_accuracy_meters": recent["accuracy_meters"],
+            "location_source": "gps" if recent_is_fresh else "last_known",
+            "location_recorded_at": recent_recorded,
+        })
+    # KAN-204: si el movil no ha mandado GPS, el aviso no puede salir sin ubicacion.
+    # Se usa el domicilio del paciente como ultima posicion conocida.
+    profile = repository.get_patient_profile()
+    home = profile.home_address if profile is not None else None
+    if home is not None and home.latitude is not None and home.longitude is not None:
+        return alert.model_copy(update={
+            "latitude": home.latitude, "longitude": home.longitude,
+            "location_accuracy_meters": None,
+            "location_source": "last_known", "location_recorded_at": now(),
+        })
+    return alert
+
+
 @app.post("/v1/emergency-alerts", response_model=EmergencyAlert, status_code=201)
 def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Optional[str] = Header(default=None)) -> EmergencyAlert:
     actor = require_auth(authorization)
@@ -3581,31 +3614,7 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
     alert_request = EmergencyAlertCreate.model_validate(request.model_dump(exclude={
         "evidence_image_base64", "evidence_mime_type", "evidence_captured_at",
     }))
-    if alert_request.latitude is None:
-        recent = recent_device_location()
-        if recent is not None:
-            recent_recorded = recent.get("recorded_at")
-            recent_is_fresh = (
-                recent_recorded is not None
-                and now() - recent_recorded <= LOCATION_ANSWER_FRESH_AGE
-            )
-            alert_request = alert_request.model_copy(update={
-                "latitude": recent["latitude"], "longitude": recent["longitude"],
-                "location_accuracy_meters": recent["accuracy_meters"],
-                "location_source": "gps" if recent_is_fresh else "last_known",
-                "location_recorded_at": recent_recorded,
-            })
-    if alert_request.latitude is None:
-        # KAN-204: si el movil no ha mandado GPS, el aviso no puede salir sin ubicacion.
-        # Se usa el domicilio del paciente como ultima posicion conocida.
-        profile = repository.get_patient_profile()
-        home = profile.home_address if profile is not None else None
-        if home is not None and home.latitude is not None and home.longitude is not None:
-            alert_request = alert_request.model_copy(update={
-                "latitude": home.latitude, "longitude": home.longitude,
-                "location_accuracy_meters": None,
-                "location_source": "last_known", "location_recorded_at": now(),
-            })
+    alert_request = resolve_alert_location(alert_request)
     image, photo_status = decode_recent_evidence_fields(
         request.evidence_image_base64, request.evidence_mime_type, request.evidence_captured_at,
     )
@@ -7520,31 +7529,44 @@ ACOUSTIC_ALERT_DEDUP = timedelta(minutes=10)
 
 
 def dispatch_acoustic_escalation(escalation: dict) -> dict:
-    """Send a cautious possible-symptom alert to the active care network."""
+    """KAN-207: aviso cauteloso con tipologia, descripcion y ubicacion garantizadas."""
     contacts = enabled_alert_contacts()
+    signal = str(escalation.get("signal", ""))
+    signal_label = escalation.get("alert_type") or ACOUSTIC_SIGNAL_LABELS.get(signal, signal)
     result = {
         "status": "no_contact", "recipients_attempted": 0, "recipients_delivered": 0,
-        "recipient_failures": "",
+        "recipient_failures": "", "alert_type": signal_label,
+        "description": escalation.get("description", escalation.get("spoken_message", "")),
+        "alert_id": None, "latitude": None, "longitude": None, "location_source": None,
     }
     if not contacts:
         return result
     result["recipients_attempted"] = len(contacts)
-    deduplication_key = f"acoustic:{escalation['signal']}:{escalation['reason']}"
+    deduplication_key = f"acoustic:{signal}:{escalation['reason']}"
     previous = repository.last_auto_alert.get(deduplication_key)
     if previous and previous > now() - ACOUSTIC_ALERT_DEDUP:
         result["status"] = "suppressed_recent"
         return result
     repository.last_auto_alert[deduplication_key] = now()
-    deliveries, failures = send_alert_to_contacts(contacts, EmergencyAlertCreate(
-        kind=escalation["kind"], spoken_message=escalation["spoken_message"],
+    alert_request = resolve_alert_location(EmergencyAlertCreate(
+        kind=escalation["kind"], alert_type=signal_label,
+        spoken_message=escalation["spoken_message"],
         explicit_help_request=escalation["explicit_help_request"],
     ))
+    draft = EmergencyAlert(id=uuid4(), created_at=now(), delivery_status="pending", **alert_request.model_dump())
+    deliveries, failures = send_alert_to_contacts(contacts, alert_request)
+    message_id = next((delivery.message_id for _, delivery in deliveries if delivery.message_id), None)
+    delivery_status = "sent" if message_id else ("test_mode" if deliveries else "failed")
+    alert = draft.model_copy(update={"delivery_status": delivery_status, "provider_message_id": message_id})
+    repository.emergency_alerts[alert.id] = alert
+    result.update({
+        "status": delivery_status,
+        "alert_id": str(alert.id),
+        "latitude": alert.latitude, "longitude": alert.longitude,
+        "location_source": alert.location_source,
+    })
     result["recipients_delivered"] = len(deliveries)
     result["recipient_failures"] = " | ".join(failures[:3])
-    if not deliveries:
-        result["status"] = "failed"
-    else:
-        result["status"] = "sent" if any(delivery.message_id for _, delivery in deliveries) else "test_mode"
     return result
 
 
@@ -7567,8 +7589,14 @@ def _apply_acoustic_outcome(outcome: dict, at: datetime, signal: str) -> dict:
         repository.add_event(EventCreate(
             kind="hazard", summary=escalation["spoken_message"], source="glasses",
             severity="urgent", occurred_at=at,
+            latitude=alert.get("latitude"), longitude=alert.get("longitude"),
             metadata={"acoustic_signal": escalation["signal"], "acoustic_stage": "escalated",
                       "acoustic_reason": escalation["reason"], "alert_status": alert["status"],
+                      "alert_id": alert.get("alert_id") or "",
+                      "alert_type": alert.get("alert_type", ""),
+                      "alert_description": alert.get("description", ""),
+                      "location_included": alert.get("latitude") is not None and alert.get("longitude") is not None,
+                      "location_source": alert.get("location_source"),
                       "recipients_attempted": alert["recipients_attempted"],
                       "recipients_delivered": alert["recipients_delivered"]},
         ))
