@@ -85,25 +85,36 @@ Prueba HTTP real (uvicorn local, token `AURA_LOCAL_TOKEN`):
   `hazard` en `GET /v1/events`. Con el repositorio en memoria sin contactos,
   `alert.status = no_contact` (esperado).
 
+
 ## App de Android (escucha en segundo plano)
 
-`AmbientListeningService` (servicio en primer plano tipo `microphone`, `PARTIAL_WAKE_LOCK`
-de 60 min, pregunta por TTS y respuesta con `SpeechRecognizer`, sin guardar audio) vive en
-la copia local usada para construir la APK instalada
-(`meta-wearables-dat-android-main/.../samples/CameraAccess`), que **no está bajo control de
-versiones**; el repo `android` todavía no la contiene.
+Implementacion versionada en el repo `farodamemoria/android`
+(`samples/CameraAccess/.../faro/`): `FaroListeningService` (servicio en primer plano tipo
+`microphone` con `PARTIAL_WAKE_LOCK`), `FaroAudioMonitor` (lectura continua del microfono de
+las gafas por SCO, sin guardar audio), `AcousticPatternDetector` (deteccion local de tos y
+golpes con anti-repeticion y suelo de -30 dBFS) y `AcousticReporter` (POST
+`/v1/acoustic-events` y `/tick`). El motor del backend sigue decidiendo cuando preguntar o
+escalar.
 
-## Pendiente (bloqueo físico, 2026-10-31)
+## Criterio 7 verificado (2026-11-04)
 
-- Criterio 7: consumo de batería y comportamiento con pantalla apagada.
-  - Quest 2 (`1WMHHA62SR1471`): no aparece en `adb devices`; `adb connect
-    192.168.1.114:5555` rechazado y ningún host de la LAN acepta el puerto 5555.
-  - Pixel 9 Pro (`53221FDAP002QF`, con la app de gafas instalada): se desconectó a mitad
-    de la sesión (sí aparecía al empezar).
-  - Redmi (`9THAC67T75LJIZDE`, Android 13): la instalación por adb la rechaza MIUI
-    (`INSTALL_FAILED_USER_RESTRICTED`; requiere activar «Instalar por USB» con cuenta Mi).
-  - APK de prueba ya compilada (`app-debug.apk`, `AURA_BACKEND_URL=http://192.168.1.136:8103`,
-    token local, sin tocar producción): la prueba se reanuda en cuanto haya un dispositivo
-    disponible.
+APK `app-arm64-v8a-debug.apk` (SHA-256 `06C9B09E3BE0D54392AEB779964C2711ED735F86033546DB99E168AC810F77AF`,
+`versionName=1.0`, dex con `FaroListeningService`, `FaroAudioMonitor` y
+`AcousticPatternDetector`; `api.loginea.com` presente y `cloudfront` ausente) instalado en el
+Pixel 9 Pro `53221FDAP002QF`, con las Meta Glasses 0908 enrutadas como microfono.
+
+- Pantalla apagada: 15:07:31 -> 15:19:00 (11 min 23 s) en `mScreenState=OFF` /
+  `mWakefulness=Dozing`, mismo proceso, `FaroListeningService` en primer plano (id 4272) y
+  `PARTIAL_WAKE_LOCK 'Faro:escucha'` continuo; `logcat FaroAudio` emite `rms=` cada ~1 s sin
+  cortes. El microfono sigue leyendo con la pantalla apagada.
+- Consumo estimado (`dumpsys batterystats`) con la escucha activa y pantalla apagada
+  (11 min 33 s): audio 14,4 mAh, cpu 4,01, mobile_radio 3,64, wifi 0,555, camara 0,487,
+  GPU 0,133 -> total ~23,5 mAh, ~122 mA, **~2,6 %/h**.
+- Baseline sin el servicio y pantalla apagada (5 min 38 s): 3,07 mAh, ~33 mA, **~0,72 %/h**.
+- Coste atribuible a la escucha ambiental: **~89 mA (~1,9 %/h)**; ~15 % de bateria en 8 h.
+- Detalle y limitaciones en `docs/kan35-evidencia/CRITERIO-7-20261104.md`.
+
+## Pendiente
+
 - Captura/streaming de audio en la app de las gafas: el backend ya acepta WAV en
-  `POST /v1/acoustic-audio`; falta que la app envíe los segmentos.
+  `POST /v1/acoustic-audio`; falta que la app envie los segmentos.
