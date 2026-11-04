@@ -1005,6 +1005,47 @@ class VideoConsentUpdate(BaseModel):
     notes: str = Field(default="", max_length=300)
 
 
+class AppErrorReport(BaseModel):
+    """KAN-191: error enviado por una aplicacion (gafas, movil o portal)."""
+
+    app: str = Field(min_length=1, max_length=120)
+    version: str = Field(default="desconocida", max_length=120)
+    message: str = Field(min_length=1, max_length=2000)
+    context: str = Field(default="", max_length=4000)
+    traceback_text: str = Field(default="", max_length=20000)
+
+
+class AppErrorRecord(BaseModel):
+    id: str
+    app: str
+    version: str
+    message: str
+    context: str
+    traceback: str
+    created_at: datetime
+    fingerprint: str
+    ticket_key: Optional[str] = None
+
+
+def normalize_app_error_text(value: str) -> str:
+    """Normaliza ids, direcciones y numeros para que el mismo fallo comparta fingerprint."""
+    text = (value or "").strip().lower()
+    text = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "<uuid>", text)
+    text = re.sub(r"\b0x[0-9a-f]+\b", "<hex>", text)
+    text = re.sub(r"\b\d+\b", "<n>", text)
+    return re.sub(r"\s+", " ", text)[:600]
+
+
+def app_error_fingerprint(app: str, message: str, traceback_text: str) -> str:
+    """Huella estable del error: mismo fallo -> mismo fingerprint -> un solo ticket."""
+    payload = "|".join((
+        normalize_app_error_text(app),
+        normalize_app_error_text(message),
+        normalize_app_error_text(traceback_text),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 class TrackerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     kind: str = Field(default="keys", pattern="^(keys|wallet|bag|other)$")
@@ -1437,6 +1478,13 @@ class InMemoryRepository:
             id TEXT PRIMARY KEY, event_id TEXT NOT NULL, message TEXT NOT NULL,
             created_at TEXT NOT NULL, spoken_at TEXT, kind TEXT NOT NULL DEFAULT 'reminder'
         )""")
+        self.event_db.execute("""CREATE TABLE IF NOT EXISTS app_errors (
+            id TEXT PRIMARY KEY, app TEXT NOT NULL, version TEXT NOT NULL,
+            message TEXT NOT NULL, context TEXT NOT NULL, traceback TEXT NOT NULL,
+            created_at TEXT NOT NULL, fingerprint TEXT NOT NULL, ticket_key TEXT
+        )""")
+        self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_app_errors_created_at ON app_errors(created_at DESC)")
+        self.event_db.execute("CREATE INDEX IF NOT EXISTS idx_app_errors_fingerprint ON app_errors(fingerprint, created_at DESC)")
         voice_columns = {row[1] for row in self.event_db.execute("PRAGMA table_info(voice_reminders)").fetchall()}
         if "kind" not in voice_columns:
             self.event_db.execute("ALTER TABLE voice_reminders ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'")
@@ -2817,6 +2865,79 @@ def version() -> dict[str, object]:
             "family_ai": bool(os.getenv("AURA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")),
         },
     }
+
+
+@app.post("/v1/app-errors", response_model=AppErrorRecord, status_code=201)
+def create_app_error(
+    report: AppErrorReport,
+    authorization: Optional[str] = Header(default=None),
+) -> AppErrorRecord:
+    """KAN-191: registra el error de una aplicacion para diagnosticar el fallo exacto."""
+    require_auth_or_device(authorization)
+    created_at = now()
+    fingerprint = app_error_fingerprint(report.app, report.message, report.traceback_text)
+    error_id = str(uuid4())
+    repository.event_db.execute(
+        """INSERT INTO app_errors
+           (id, app, version, message, context, traceback, created_at, fingerprint, ticket_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
+        (
+            error_id,
+            report.app,
+            report.version,
+            report.message,
+            report.context,
+            report.traceback_text,
+            created_at.isoformat(),
+            fingerprint,
+        ),
+    )
+    repository.event_db.commit()
+    return AppErrorRecord(
+        id=error_id,
+        app=report.app,
+        version=report.version,
+        message=report.message,
+        context=report.context,
+        traceback=report.traceback_text,
+        created_at=created_at,
+        fingerprint=fingerprint,
+        ticket_key=None,
+    )
+
+
+@app.get("/v1/app-errors", response_model=list[AppErrorRecord])
+def list_app_errors(
+    limit: int = 50,
+    app: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+) -> list[AppErrorRecord]:
+    """KAN-191: errores recientes para localizar el fallo sin adivinar."""
+    require_auth(authorization)
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="Limit must be between 1 and 200")
+    query = "SELECT * FROM app_errors"
+    params: list[object] = []
+    if app:
+        query += " WHERE app = ?"
+        params.append(app)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = repository.event_db.execute(query, params).fetchall()
+    return [
+        AppErrorRecord(
+            id=row["id"],
+            app=row["app"],
+            version=row["version"],
+            message=row["message"],
+            context=row["context"],
+            traceback=row["traceback"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            fingerprint=row["fingerprint"],
+            ticket_key=row["ticket_key"],
+        )
+        for row in rows
+    ]
 
 
 @app.get("/v1/account", response_model=AccountSummary)

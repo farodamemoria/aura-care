@@ -7,6 +7,36 @@ const token = (localStorage.getItem('auraToken') || '').trim();
 const authHeaders = token ? {Authorization: `Bearer ${token}`} : {};
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/assets/sw.js');
 
+// KAN-191: los errores del portal quedan registrados en el log central de Faro.
+function reportFaroError(message, contextText, traceText) {
+  if (!token) return;
+  try {
+    const payload = {
+      app: 'portal-faro-familia',
+      version: 'twa',
+      message: String(message || 'Error sin mensaje').slice(0, 2000),
+      context: String(contextText || '').slice(0, 4000),
+      traceback_text: String(traceText || '').slice(0, 20000),
+    };
+    fetch('/v1/app-errors', {method: 'POST', keepalive: true, headers: {...authHeaders, 'Content-Type': 'application/json'}, body: JSON.stringify(payload)}).catch(() => {});
+  } catch (ignored) {}
+}
+window.addEventListener('error', event => {
+  reportFaroError(
+    event.message || 'window.error',
+    `${location.pathname} ${event.filename || ''}:${event.lineno || 0}:${event.colno || 0}`,
+    event.error && event.error.stack ? event.error.stack : '',
+  );
+});
+window.addEventListener('unhandledrejection', event => {
+  const reason = event.reason;
+  reportFaroError(
+    reason && reason.message ? reason.message : String(reason),
+    `unhandledrejection ${location.pathname}`,
+    reason && reason.stack ? reason.stack : '',
+  );
+});
+
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, cache: 'no-store', headers: {...authHeaders, ...(options.headers || {})}});
   if (!response.ok) {

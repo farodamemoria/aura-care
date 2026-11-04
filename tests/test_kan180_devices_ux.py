@@ -194,9 +194,9 @@ def test_css_del_dashboard_y_responsive() -> None:
 def test_cache_del_service_worker_actualizada() -> None:
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     sw = (ROOT / "web" / "assets" / "sw.js").read_text(encoding="utf-8")
-    assert re.search(r"/assets/app\.js\?v=52", html)
+    assert re.search(r"/assets/app\.js\?v=53", html)
     assert re.search(r"/assets/app\.css\?v=7", html)
     cache = re.search(r"faro-familia-v(\d+)", sw)
     assert cache and int(cache.group(1)) >= 63
-    assert "/assets/app.js?v=52" in sw
+    assert "/assets/app.js?v=53" in sw
     assert "/assets/app.css?v=7" in sw

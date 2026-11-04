@@ -192,6 +192,13 @@ Salud y versión:
 
 - `GET /health`, `GET /v1/version`.
 
+Errores de los aplicativos (KAN-191):
+
+- POST /v1/app-errors — registra un error de gafas, móvil o portal (app, versión, mensaje,
+  contexto y traza) con un ingerprint estable que agrupa el mismo fallo.
+- GET /v1/app-errors — lista los errores recientes para diagnosticar sin adivinar; el monitor
+  scripts/error_monitor.py los convierte en tickets de Jira sin duplicados (timer cada 15 min).
+
 Cuenta y configuración:
 
 - `GET /v1/account`, `GET /v1/care-contact`, `PUT /v1/care-contact`,
@@ -327,7 +334,7 @@ Camaras locales (KAN-178):
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v63`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v64`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.
