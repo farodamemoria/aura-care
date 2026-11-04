@@ -2400,11 +2400,19 @@ app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 # - assetlinks/manifest: verificacion de la TWA; Android no envia credenciales.
 # - /download/: distribucion de APKs ya publicas (sin datos del paciente).
 # - whatsapp/webhook: Meta no puede enviar HTTP Basic; valida su propio token.
-PUBLIC_PORTAL_PATHS = ("/health", "/.well-known/", "/download/", "/v1/whatsapp/webhook")
+# - /assets/: cascaron estatico del portal (HTML/CSS/JS/iconos), sin datos del paciente;
+#   la TWA y el service worker no pueden enviar credenciales al cargar.
+# - /: index del portal (cascaron); los datos siguen detras de Bearer en /v1/*.
+PUBLIC_PORTAL_PATHS = (
+    "/.well-known/", "/download/", "/v1/whatsapp/webhook", "/assets/",
+)
+PUBLIC_PORTAL_EXACT_PATHS = ("/", "/health")
 
 
 def is_public_portal_path(path: str) -> bool:
-    return any(path == prefix or path.startswith(prefix) for prefix in PUBLIC_PORTAL_PATHS)
+    return path in PUBLIC_PORTAL_EXACT_PATHS or any(
+        path == prefix or path.startswith(prefix) for prefix in PUBLIC_PORTAL_PATHS
+    )
 
 
 def build_portal_password_app(application: FastAPI) -> FastAPI:
@@ -5080,6 +5088,66 @@ def object_lookup_answer(question: str, language: str) -> Optional[str]:
     return labels["found_no_place"].format(object=object_label, moment=moment)
 
 
+PEOPLE_LOOKUP_LABELS = {
+    "es": {"related": "{name} es tu {relationship}.", "plain": "Es {name}."},
+    "gl": {"related": "{name} é a túa {relationship}.", "plain": "É {name}."},
+    "en": {"related": "{name} is your {relationship}.", "plain": "It is {name}."},
+}
+PEOPLE_LOOKUP_STOPWORDS = {
+    "como", "como", "cual", "quien", "quién", "donde", "dónde", "llama", "nombre",
+    "del", "de", "la", "el", "los", "las", "mi", "mis", "tu", "tus", "su", "sus",
+    "que", "qué", "es", "son", "esta", "está", "esta", "conocida", "conocido",
+    "persona", "familiar", "sabe", "sabes", "dime", "puedes", "decir", "para",
+    "the", "who", "what", "is", "are", "my", "your", "name", "called", "does",
+    "quen", "cal", "chamase", "nome", "da", "do", "dos", "das", "meu", "miña",
+}
+
+
+def _normalize_words(text: str) -> list[str]:
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    plain = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return [word for word in plain.replace("?", " ").replace("¿", " ").split() if word]
+
+
+def people_lookup_answer(question: str, language: str) -> Optional[str]:
+    """KAN-206: responde parentescos («¿como se llama mi mujer?») sin depender de la IA."""
+    labels = PEOPLE_LOOKUP_LABELS.get(language, PEOPLE_LOOKUP_LABELS["es"])
+    question_words = set(_normalize_words(question))
+    if not question_words:
+        return None
+    people = list(repository.people.values())
+    by_name = [
+        person for person in people
+        if _normalize_words(person.display_name) and all(
+            word in question_words for word in _normalize_words(person.display_name)
+        )
+    ]
+    if by_name:
+        person = sorted(by_name, key=lambda item: len(_normalize_words(item.display_name)))[-1]
+        relationship = (person.relationship or "").strip()
+        return labels["related"].format(name=person.display_name, relationship=relationship) \
+            if relationship else labels["plain"].format(name=person.display_name)
+    best: Optional[tuple[int, "Person"]] = None
+    for person in people:
+        relationship_words = [
+            word for word in _normalize_words(person.relationship or "")
+            if len(word) > 3 and word not in PEOPLE_LOOKUP_STOPWORDS
+        ]
+        if not relationship_words or not any(word in question_words for word in relationship_words):
+            continue
+        score = 3 if set(relationship_words) & question_words and len(relationship_words) == 1 else 2
+        if best is None or score > best[0]:
+            best = (score, person)
+    if best is None:
+        return None
+    person = best[1]
+    relationship = (person.relationship or "").strip()
+    return labels["related"].format(name=person.display_name, relationship=relationship) \
+        if relationship else labels["plain"].format(name=person.display_name)
+
+
 FAMILY_ALERT_TOOL = {
     "type": "function",
     "name": "registrar_aviso",
@@ -5410,7 +5478,11 @@ def ask_family_question(
             answer = FAMILY_CLOSERS_REPLY.get(language, FAMILY_CLOSERS_REPLY["es"])
         generated_by = "openai"
     else:
-        answer = object_lookup_answer(question, language) or build_family_summary(events, language, question, day_label)
+        answer = (
+            object_lookup_answer(question, language)
+            or people_lookup_answer(question, language)
+            or build_family_summary(events, language, question, day_label)
+        )
     repository.add_family_message(conversation_id, "assistant", answer)
     sources = [
         FamilyAnswerSource(

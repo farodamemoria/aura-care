@@ -25,12 +25,24 @@ def test_portal_open_when_password_not_configured(
     assert client.get("/").status_code == 200
 
 
-def test_portal_requires_password_and_accepts_it(
+def test_portal_shell_is_public_but_data_requires_auth(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FARO_PORTAL_PASS", "secreto")
-    assert client.get("/").status_code == 401
-    assert client.get("/", headers=_basic()).status_code == 200
+    assert client.get("/").status_code == 200
+    assert client.get("/assets/manifest.webmanifest").status_code == 200
+    assert client.get("/assets/app.js").status_code == 200
+    assert client.get("/v1/patient-profile").status_code == 401
+    assert client.get("/v1/camera/status").status_code == 401
+
+
+def test_lookalike_paths_are_not_public(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FARO_PORTAL_PASS", "secreto")
+    assert client.get("/assets-private/x").status_code == 401
+    assert client.get("/healthz").status_code == 401
+    assert client.get("/v1/people").status_code == 401
 
 
 def test_public_paths_stay_reachable_with_password(
