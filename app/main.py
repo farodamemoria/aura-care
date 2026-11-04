@@ -3399,6 +3399,17 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
                 "location_accuracy_meters": recent["accuracy_meters"],
                 "location_source": "gps", "location_recorded_at": recent["recorded_at"],
             })
+    if alert_request.latitude is None:
+        # KAN-204: si el movil no ha mandado GPS, el aviso no puede salir sin ubicacion.
+        # Se usa el domicilio del paciente como ultima posicion conocida.
+        profile = repository.get_patient_profile()
+        home = profile.home_address if profile is not None else None
+        if home is not None and home.latitude is not None and home.longitude is not None:
+            alert_request = alert_request.model_copy(update={
+                "latitude": home.latitude, "longitude": home.longitude,
+                "location_accuracy_meters": None,
+                "location_source": "last_known", "location_recorded_at": now(),
+            })
     image, photo_status = decode_recent_evidence_fields(
         request.evidence_image_base64, request.evidence_mime_type, request.evidence_captured_at,
     )
@@ -3421,18 +3432,18 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
     repository.add_event(EventCreate(
         kind="help_request" if request.kind == "episode" else "location",
         summary=request.spoken_message, source="glasses", severity="urgent",
-        latitude=request.latitude, longitude=request.longitude,
+        latitude=alert_request.latitude, longitude=alert_request.longitude,
         metadata={"alert_id": str(alert.id), "delivery_status": delivery_status,
                   "photo_delivery_status": photo_status,
                   "has_photo": image is not None,
-                  "location_included": request.latitude is not None and request.longitude is not None,
-                  "location_approximate": request.latitude is not None and (
-                      request.location_accuracy_meters is None
-                      or request.location_accuracy_meters > LOCATION_APPROXIMATE_METERS),
-                  "location_accuracy_meters": request.location_accuracy_meters,
-                  "location_source": request.location_source,
-                  "location_recorded_at": (request.location_recorded_at.isoformat()
-                                           if request.location_recorded_at else None),
+                  "location_included": alert_request.latitude is not None and alert_request.longitude is not None,
+                  "location_approximate": alert_request.latitude is not None and (
+                      alert_request.location_accuracy_meters is None
+                      or alert_request.location_accuracy_meters > LOCATION_APPROXIMATE_METERS),
+                  "location_accuracy_meters": alert_request.location_accuracy_meters,
+                  "location_source": alert_request.location_source,
+                  "location_recorded_at": (alert_request.location_recorded_at.isoformat()
+                                           if alert_request.location_recorded_at else None),
                   "recipients_attempted": len(contacts), "recipients_delivered": len(deliveries),
                   "recipient_roles": ",".join(contact.role for contact, _ in deliveries),
                   "recipient_channels": ",".join(sorted({contact.preferred_channel for contact, _ in deliveries})),
