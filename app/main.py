@@ -5811,15 +5811,30 @@ def enroll_face_samples(person_id: UUID, files: Annotated[list[UploadFile], File
     require_auth(authorization)
     person = person_or_404(person_id)
     images = read_face_images(files)
-    face_provider.delete(person_id)
-    indexed = face_provider.enroll(person_id, images)
-    if indexed < 1:
-        face_provider.delete(person_id)
-        raise HTTPException(status_code=422, detail="Each image must contain one usable face")
     photos_saved = repository.save_person_photos(person_id, images)
+    if photos_saved < 1:
+        raise HTTPException(status_code=500, detail="The photos could not be saved")
+    indexed = 0
+    try:
+        face_provider.delete(person_id)
+        indexed = face_provider.enroll(person_id, images)
+        if indexed < 1:
+            face_provider.delete(person_id)
+            logging.getLogger("aura.people").warning(
+                "enrolamiento facial sin cara usable para %s; fotos guardadas", person_id
+            )
+    except Exception as error:
+        indexed = 0
+        try:
+            face_provider.delete(person_id)
+        except Exception:
+            pass
+        logging.getLogger("aura.people").warning(
+            "enrolamiento facial fallido para %s; fotos guardadas: %s", person_id, error
+        )
     updated = person.model_copy(update={
         "enrollment_samples": indexed,
-        "enrollment_complete": True,
+        "enrollment_complete": indexed >= 1,
         "profile_photo_available": photos_saved > 0,
     })
     repository.people[person_id] = updated

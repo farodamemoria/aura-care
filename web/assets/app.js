@@ -1063,7 +1063,9 @@ function renderPeople(people) {
     node.querySelector('small').textContent = person.relationship;
     node.querySelector('.enrollment').textContent = person.enrollment_complete
       ? '✓ Reconocimiento preparado'
-      : 'Añade al menos una foto para reconocerla';
+      : (person.profile_photo_available
+        ? 'Fotos guardadas. No se detectó una cara clara; añade otra para activar el reconocimiento'
+        : 'Añade al menos una foto para reconocerla');
     const editToggle = node.querySelector('.edit-toggle'), editForm = node.querySelector('.person-edit'), gallery = node.querySelector('.face-sample-gallery');
     editForm.elements.display_name.value = person.display_name;
     editForm.elements.relationship.value = person.relationship;
@@ -1072,8 +1074,8 @@ function renderPeople(people) {
       editForm.hidden = !editForm.hidden;
       gallery.hidden = editForm.hidden;
       editToggle.textContent = editForm.hidden ? 'Ver y editar ficha' : 'Cerrar ficha';
-      if (!gallery.hidden && !gallery.childElementCount && person.enrollment_complete) {
-        const count = Math.min(Math.max(person.enrollment_samples || 1, 1), 5);
+      if (!gallery.hidden && !gallery.childElementCount && (person.enrollment_complete || person.profile_photo_available)) {
+        const count = Math.min(Math.max(person.enrollment_samples || (person.profile_photo_available ? 5 : 1), 1), 5);
         for (let index = 1; index <= count; index += 1) {
           const sample = document.createElement('img');
           sample.loading = 'lazy';
@@ -1107,7 +1109,13 @@ function renderPeople(people) {
       const data = new FormData();
       for (const file of files) { const prepared = await preparePhoto(file); data.append('files', prepared || file); }
       const button = form.querySelector('button'); button.disabled = true; button.textContent = 'Preparando…';
-      try { await api(`/v1/people/${person.id}/face-samples`, {method: 'POST', body: data}); toast('Reconocimiento preparado.', 'success'); await load(); }
+      try {
+        const updated = await api(`/v1/people/${person.id}/face-samples`, {method: 'POST', body: data});
+        toast(updated && updated.enrollment_complete
+          ? 'Reconocimiento preparado.'
+          : 'Fotos guardadas. No se detectó una cara clara; añade otra para activar el reconocimiento.', 'success');
+        await load();
+      }
       catch (error) { notify(error); }
       finally { button.disabled = false; button.textContent = 'Preparar reconocimiento'; }
     });
