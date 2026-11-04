@@ -64,15 +64,17 @@ def is_help_request(text: str) -> bool:
 
 
 LOST_PATTERNS = (
-    r"\b(estoy|toy|estou)\s+(perdid[oa]|desorientad[oa])\b",
+    r"\b(estoy|toy|estou)\s+(perdid[oa]s?|desorientad[oa]s?)\b",
     r"\b(perdid[oa]|desorientad[oa])\s+(estoy|toy|estou)\b",
-    r"\bno\s+(se|sei)\s+(donde|onde)\s+(estoy|estou)\b",
-    r"\bnon\s+sei\s+(onde|donde)\s+(estou|estoy)\b",
-    r"\b(me\s+)?(he\s+)?(perdid[oa]|perdin|perdinme|perdim)\b",
+    r"\bno\s+(se|sei)\s+(donde|onde)\s+(estoy|estou|me\s+encuentro|me\s+atopo)\b",
+    r"\bnon\s+sei\s+(onde|donde)\s+(estou|estoy|me\s+atopo|me\s+encuentro)\b",
+    r"\b(me\s+(he\s+)?(perdid[oa]|perdin|perdim)|perdinme|perdimme)\b",
     r"\bnon\s+atopo\s+(o\s+)?camin?o\b",
     r"\bno\s+encuentro\s+(el\s+)?camin?o\b",
     r"\bno\s+(se|sei)\s+volver\b",
+    r"\bno\s+(se|sé)\s+(como|cómo)\s+volver\b",
     r"\bnon\s+sei\s+volver\b",
+    r"\bno\s+(me\s+)?(acuerdo|recuerdo)\s+(de\s+)?(donde|dónde)\s+(estoy|me\s+encuentro)\b",
 )
 
 
