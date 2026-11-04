@@ -10,7 +10,7 @@ import app.main as main
 
 @pytest.fixture()
 def client() -> TestClient:
-    return TestClient(main.app)
+    return TestClient(main.app, base_url="https://farofamilia.loginea.com")
 
 
 def _basic(user: str = "faro", password: str = "secreto") -> dict[str, str]:
@@ -25,11 +25,15 @@ def test_portal_open_when_password_not_configured(
     assert client.get("/").status_code == 200
 
 
-def test_portal_shell_is_public_but_data_requires_auth(
+def test_portal_document_requires_auth_but_assets_stay_public(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # KAN-203: el documento del portal ya no es publico (antes KAN-199 lo abria para la TWA).
     monkeypatch.setenv("FARO_PORTAL_PASS", "secreto")
-    assert client.get("/").status_code == 200
+    monkeypatch.setenv("AURA_SESSION_SECRET", "test-session-secret-0123456789abcdef0123456789abcdef")
+    assert client.get("/").status_code == 401
+    assert client.get("/", headers=_basic(password="mal")).status_code == 401
+    assert client.get("/", headers=_basic()).status_code == 200
     assert client.get("/assets/manifest.webmanifest").status_code == 200
     assert client.get("/assets/app.js").status_code == 200
     assert client.get("/v1/patient-profile").status_code == 401
