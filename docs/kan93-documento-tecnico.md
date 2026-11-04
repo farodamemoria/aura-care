@@ -290,7 +290,8 @@ Emparejamiento y dispositivos:
 
 - `POST /v1/pairing-invites`, `POST /v1/pairing/claim`,
   `POST /v1/device-credentials/validate`, `GET /v1/devices`,
-  `PUT /v1/devices/video-consent`.
+  `PUT /v1/devices/video-consent`, `PUT /v1/devices/sources/{source}/settings`,
+  `POST /v1/devices/{device_id}/revoke`, `POST /v1/devices/connection-test`.
 
 Rastreadores vinculados (KAN-165):
 
@@ -326,7 +327,7 @@ Camaras locales (KAN-178):
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v61`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v63`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.

@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="/assets/icon-180.png">
   <link rel="icon" href="/assets/icon-192.png" sizes="192x192" type="image/png">
   <link rel="manifest" href="/assets/manifest.webmanifest">
-  <link rel="stylesheet" href="/assets/app.css?v=5">
+  <link rel="stylesheet" href="/assets/app.css?v=7">
   <link rel="stylesheet" href="/assets/events.css?v=3">
   <link rel="stylesheet" href="/assets/people.css?v=2">
   <link rel="stylesheet" href="/assets/care.css?v=2">
@@ -245,8 +245,16 @@
       <div id="longitudinal" class="stats-list"></div>
     </section>
     <section id="devices-view" class="view" role="tabpanel" aria-labelledby="tab-devices" tabindex="-1">
-      <div class="section-heading"><div><span class="kicker">Estado del sistema</span><h2>Dispositivos y servicios</h2><p>Inventario autorizado y actividad reciente de las gafas, el móvil, el portal y el servicio. Aquí se gestiona el consentimiento de vídeo y las solicitudes de transmisión (KAN-75).</p></div></div>
-      <div id="devices" class="device-list"></div>
+      <div class="section-heading">
+        <div><span class="kicker">Estado del sistema</span><h2>Dispositivos y servicios</h2><p>Estado, configuración y acciones de las gafas, el móvil, el ojo de Faro y el portal. Aquí se emparejan accesos, se ajustan permisos, se revisa el consentimiento de vídeo y se piden transmisiones (KAN-180).</p></div>
+        <div class="section-actions">
+          <button id="devices-refresh" type="button" class="secondary">Actualizar</button>
+          <button id="device-pair" type="button" class="primary">Emparejar dispositivo</button>
+        </div>
+      </div>
+      <div id="device-health" class="device-health" aria-live="polite"></div>
+      <p id="device-summary" class="status-line device-summary" role="status">Cargando dispositivos…</p>
+      <div id="devices" class="device-groups"></div>
     </section>
   </main>
   <template id="person-template"><article class="person-card"><div class="avatar" aria-hidden="true"></div><img class="person-photo" alt="" loading="lazy" hidden><div class="person-info"><strong></strong><small></small><span class="enrollment"></span></div><button type="button" class="secondary edit-toggle">Ver y editar ficha</button><section class="face-sample-gallery" hidden aria-label="Fotografías de reconocimiento"></section><form class="person-edit" hidden><label>Nombre<input name="display_name" required maxlength="80"></label><label>Relación<input name="relationship" required maxlength="80"></label><label class="check"><input name="consent_granted" type="checkbox"><span>Autorización registrada</span></label><button class="primary">Guardar cambios</button></form><form class="samples"><label class="camera-button">📷 <span>Hacer o elegir fotos</span><input type="file" name="files" accept="image/jpeg,image/png,image/heic" multiple required></label><div class="file-hint">De 1 a 5 fotos. Frontal, con buena luz y sin otras personas (3–5 mejoran la precisión).</div><button class="primary">Preparar reconocimiento</button></form><button class="text-danger delete">Eliminar persona y datos biométricos</button></article></template>
@@ -261,6 +269,26 @@
       </div>
     </div>
   </dialog>
-  <script src="/assets/app.js?v=50" defer></script>
+  <dialog id="pair-dialog" class="confirm-dialog pair-dialog" aria-labelledby="pair-title">
+    <div class="inner">
+      <h3 id="pair-title">Emparejar dispositivo</h3>
+      <p>Genera un código de un solo uso válido durante diez minutos. La otra persona lo canjea desde su dispositivo.</p>
+      <label>Tipo de acceso
+        <select id="device-pair-role">
+          <option value="family">Familiar</option>
+          <option value="caregiver">Cuidador</option>
+          <option value="clinician">Profesional sanitario</option>
+        </select>
+      </label>
+      <button type="button" class="primary" id="device-pair-create">Crear código</button>
+      <output id="device-pair-code" class="pair-code" aria-live="polite"></output>
+      <p id="device-pair-status" class="device-meta" role="status"></p>
+      <div class="actions">
+        <button type="button" class="secondary" id="device-pair-copy" hidden>Copiar código</button>
+        <button type="button" class="secondary" id="device-pair-close">Cerrar</button>
+      </div>
+    </div>
+  </dialog>
+  <script src="/assets/app.js?v=52" defer></script>
 </body>
 </html>
