@@ -3813,7 +3813,10 @@ def reset_cooldowns(authorization: Optional[str] = Header(default=None)) -> dict
     repository.last_outcome.clear()
     repository.last_review_created.clear()
     repository.last_emergency_at.clear()
-    return {"status": "ok", "cleared": cleared}
+    with _camera_hazard_lock:
+        cleared_hazards = len(_camera_hazard_last)
+        _camera_hazard_last.clear()
+    return {"status": "ok", "cleared": cleared, "camera_hazards": cleared_hazards}
 
 
 DEMO_QUESTIONS = (

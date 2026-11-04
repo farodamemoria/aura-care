@@ -228,6 +228,15 @@ def test_camera_hazard_kind_prefers_a_fall_over_a_door(client: TestClient) -> No
     assert main.camera_hazard_kind("PELIGRO: la puerta de casa abierta.") == "door_open"
 
 
+def test_reset_cooldowns_clears_the_camera_hazard_window(client: TestClient) -> None:
+    with main._camera_hazard_lock:
+        main._camera_hazard_last["dangerous_impact"] = dt.datetime.now(dt.timezone.utc)
+    response = client.post("/v1/admin/reset-cooldowns", headers=HEADERS, json={})
+    assert response.status_code == 200
+    assert response.json()["camera_hazards"] == 1
+    assert main._camera_hazard_last == {}
+
+
 def _load_bridge():
     import importlib.util
 
