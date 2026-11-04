@@ -248,7 +248,8 @@ Ubicación:
 
 - `POST /v1/location-sessions`, `PUT /v1/location-sessions/{session_id}/location`,
   `GET /v1/location-sessions/active`, `POST /v1/location-sessions/{session_id}/stop`,
-  `GET /v1/location-share/{share_token}`, `POST /v1/location/answer`.
+  `GET /v1/location-share/{share_token}`, `POST /v1/location/answer`,
+  `GET /v1/location/last` (última posición persistida del móvil, KAN-205).
 
 Eventos, memoria y objetos:
 

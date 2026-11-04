@@ -21,7 +21,11 @@ HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("AURA_LOCAL_TOKEN", TOKEN)
-    return TestClient(main.app)
+    main.repository.clear_last_device_location()
+    main._LAST_DEVICE_LOCATION.clear()
+    yield TestClient(main.app)
+    main.repository.clear_last_device_location()
+    main._LAST_DEVICE_LOCATION.clear()
 
 
 def _set_home() -> None:
