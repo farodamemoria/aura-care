@@ -21,13 +21,16 @@ PERSON_ID = main.UUID("22222222-2222-4222-8222-222222222222")
 
 
 class RecordingProvider:
-    def __init__(self, indexed: int | None = None) -> None:
+    def __init__(self, indexed: int | None = None, fail: bool = False) -> None:
         self.indexed = indexed
+        self.fail = fail
         self.deleted: list[main.UUID] = []
         self.enrolled: list[int] = []
 
     def enroll(self, person_id: main.UUID, images: list[bytes]) -> int:
         self.enrolled.append(len(images))
+        if self.fail:
+            raise RuntimeError("rekognition unavailable")
         return len(images) if self.indexed is None else self.indexed
 
     def search(self, image: bytes) -> list[main.FaceCandidate]:
@@ -82,12 +85,40 @@ def test_more_than_five_photos_are_rejected(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_unusable_face_is_rejected_and_nothing_indexed(client: TestClient) -> None:
+def test_unusable_face_keeps_photos_and_returns_200(client: TestClient) -> None:
     provider = RecordingProvider(indexed=0)
     main.face_provider = provider
     response = client.post(f"/v1/people/{PERSON_ID}/face-samples", headers=HEADERS, files=_files(2))
-    assert response.status_code == 422
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enrollment_samples"] == 0
+    assert body["enrollment_complete"] is False
+    assert body["profile_photo_available"] is True
     assert provider.deleted.count(PERSON_ID) >= 2
+    first = client.get(f"/v1/people/{PERSON_ID}/face-samples/1", headers=HEADERS)
+    assert first.status_code == 200
+    assert first.content == JPEG
+
+
+def test_face_provider_failure_keeps_photos_and_returns_200(client: TestClient) -> None:
+    provider = RecordingProvider(fail=True)
+    main.face_provider = provider
+    response = client.post(f"/v1/people/{PERSON_ID}/face-samples", headers=HEADERS, files=_files(2))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enrollment_samples"] == 0
+    assert body["enrollment_complete"] is False
+    assert body["profile_photo_available"] is True
+    assert main.repository.person_photo_sample(PERSON_ID, 2) is not None
+
+
+def test_photos_not_saved_returns_500(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = RecordingProvider()
+    main.face_provider = provider
+    monkeypatch.setattr(main.repository, "save_person_photos", lambda *args, **kwargs: 0)
+    response = client.post(f"/v1/people/{PERSON_ID}/face-samples", headers=HEADERS, files=_files(2))
+    assert response.status_code == 500
+    assert provider.enrolled == []
 
 
 def test_reenrolling_replaces_previous_faces(client: TestClient) -> None:
