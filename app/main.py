@@ -701,6 +701,20 @@ class LocationAnswer(BaseModel):
     place_label: Optional[str] = None
     distance_meters: Optional[float] = None
     accuracy_meters: float
+    age_seconds: Optional[float] = None
+    location_source: Optional[str] = None
+
+
+class LastKnownLocation(BaseModel):
+    available: bool
+    status: str
+    message: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy_meters: Optional[float] = None
+    recorded_at: Optional[datetime] = None
+    age_seconds: Optional[float] = None
+    location_source: Optional[str] = None
 
 
 class OnboardingCreate(BaseModel):
@@ -745,6 +759,10 @@ LOCATION_APPROXIMATE_METERS = 50.0
 LOCATION_REFRESH_AFTER = timedelta(seconds=90)
 LOCATION_STALE_AFTER = timedelta(minutes=10)
 LOCATION_MAX_AGE = timedelta(minutes=30)
+# KAN-205: la app solo puede entregar un fix fresco (GPS/red) o, si no lo consigue, su ultima
+# posicion conocida (hasta 15 min). Pasado ese margen no se puede afirmar donde esta la persona.
+LOCATION_ANSWER_FRESH_AGE = timedelta(minutes=5)
+LOCATION_ANSWER_LAST_KNOWN_AGE = timedelta(minutes=15)
 
 
 def location_age_minutes(recorded_at: Optional[datetime], reference: Optional[datetime] = None) -> int:
@@ -2164,6 +2182,34 @@ class InMemoryRepository:
             )
             self.event_db.commit()
 
+    def save_last_device_location(self, payload: dict) -> None:
+        """KAN-205: la ultima posicion del movil sobrevive a reinicios y despliegues."""
+        with self.lock:
+            self.event_db.execute(
+                "INSERT OR REPLACE INTO configuration(key, value_json) VALUES('last_device_location', ?)",
+                (json.dumps(payload, ensure_ascii=False),),
+            )
+            self.event_db.commit()
+
+    def get_last_device_location(self) -> Optional[dict]:
+        row = self.event_db.execute(
+            "SELECT value_json FROM configuration WHERE key='last_device_location'"
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            data = json.loads(row[0])
+        except (TypeError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def clear_last_device_location(self) -> None:
+        with self.lock:
+            self.event_db.execute(
+                "DELETE FROM configuration WHERE key='last_device_location'"
+            )
+            self.event_db.commit()
+
     def save_memories(self) -> None:
         with self.lock:
             self.event_db.execute("DELETE FROM memories")
@@ -2450,12 +2496,14 @@ app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 # - whatsapp/webhook: Meta no puede enviar HTTP Basic; valida su propio token.
 # - /assets/: cascaron estatico del portal (CSS/JS/iconos), sin datos del paciente; la TWA y
 #   el service worker los piden sin credenciales.
+# - /v1/pairing/claim: la app aun no tiene credencial; el secreto es el codigo de un solo uso
+#   (10 min). KAN-205: sin esto un movil nuevo no puede emparejarse ni enviar ubicacion.
 # El documento "/" y todas las rutas de datos (/v1/*, imagenes de camara) SI exigen credenciales:
 # con la contrasena maestra (HTTP Basic) o con el Bearer de las apps.
 PUBLIC_PORTAL_PATHS = (
     "/.well-known/", "/download/", "/v1/whatsapp/webhook", "/assets/",
 )
-PUBLIC_PORTAL_EXACT_PATHS = ("/health",)
+PUBLIC_PORTAL_EXACT_PATHS = ("/health", "/v1/pairing/claim")
 DEFAULT_PORTAL_HOSTS = "farofamilia.loginea.com"
 
 
@@ -3220,59 +3268,150 @@ def require_auth_or_device(authorization: Optional[str]) -> str:
     return status.care_circle_id
 
 
+def location_answer_for_point(
+    latitude: float, longitude: float, accuracy_meters: float,
+    recorded_at: Optional[datetime], source: str = "gps",
+) -> LocationAnswer:
+    """KAN-205: responde con el fix disponible en vez de cortar con `refresh_required`.
+
+    `source` es `gps` para el fix que acaba de mandar el movil y `last_known` cuando la posicion
+    viene de la ultima ubicacion guardada. La antiguedad se refleja siempre en el mensaje para no
+    afirmar como actual algo que no lo es.
+    """
+    reference = now()
+    recorded_at = _parse_location_datetime(recorded_at) or reference
+    age = max(reference - recorded_at, timedelta(0))
+    age_seconds = round(age.total_seconds(), 1)
+    stale = age > LOCATION_ANSWER_FRESH_AGE
+    age_minutes = max(1, int(round(age.total_seconds() / 60))) if age.total_seconds() >= 30 else 0
+    prefix = ""
+    if source == "last_known":
+        prefix = (f"Según tu última ubicación, hace {age_minutes} minutos, "
+                  if age_minutes else "Según tu última ubicación, ")
+    elif stale:
+        prefix = f"Tu última ubicación es de hace {age_minutes} minutos: "
+
+    profile = repository.get_patient_profile()
+    home = profile.home_address if profile else None
+    home_label = (home.label() if home and home.label() else "Casa")
+    at_home = False
+    distance: Optional[float] = None
+    if home and home.latitude is not None and home.longitude is not None:
+        distance = distance_meters(latitude, longitude, home.latitude, home.longitude)
+        home_margin = max(35.0, min(accuracy_meters, 150.0))
+        at_home = distance <= home_margin
+    approximate = accuracy_meters > LOCATION_APPROXIMATE_METERS
+    approximate_note = (
+        f" La señal es aproximada (±{int(round(accuracy_meters))} m)." if approximate else ""
+    )
+    status = "last_known" if (stale or source == "last_known") else "coordinates_available"
+    if at_home:
+        message = (prefix + f"estabas en casa, en {home_label}." if prefix
+                   else f"Estás en casa, en {home_label}.")
+        return LocationAnswer(
+            status="last_known" if (stale or source == "last_known") else "at_home",
+            message=message + approximate_note,
+            place_label=home_label, distance_meters=round(distance, 1) if distance is not None else None,
+            accuracy_meters=accuracy_meters, age_seconds=age_seconds,
+            location_source=source,
+        )
+    place = reverse_geocode(latitude, longitude)
+    if place:
+        message = prefix + f"estabas cerca de {place}." if prefix else f"Estás cerca de {place}."
+    else:
+        message = prefix + "no parecía que estuvieras en casa." if prefix else "No parece que estés en casa."
+    message += approximate_note
+    if home and home.latitude is not None and home.longitude is not None:
+        direction = cardinal_direction(
+            bearing_degrees(latitude, longitude, home.latitude, home.longitude)
+        )
+        message += (
+            f" Para volver a casa, camina unos {int(round(distance or 0))} metros hacia el {direction}; "
+            "dime cuando avances y te voy guiando."
+        )
+    return LocationAnswer(
+        status=status, message=message, place_label=place,
+        distance_meters=round(distance, 1) if distance is not None else None,
+        accuracy_meters=accuracy_meters, age_seconds=age_seconds, location_source=source,
+    )
+
+
 @app.post("/v1/location/answer", response_model=LocationAnswer)
 def answer_location_question(
     request: LocationQuestion,
     authorization: Optional[str] = Header(default=None),
 ) -> LocationAnswer:
     require_auth_or_device(authorization)
-    if request.recorded_at and now() - request.recorded_at > timedelta(minutes=5):
-        return LocationAnswer(
-            status="refresh_required",
-            message="Estoy actualizando tu ubicación para poder decírtelo con seguridad.",
-            accuracy_meters=request.accuracy_meters,
+    reference = now()
+    recorded_at = _parse_location_datetime(request.recorded_at) or reference
+    if recorded_at > reference + LOCATION_ANSWER_FRESH_AGE:
+        recorded_at = reference
+    age = max(reference - recorded_at, timedelta(0))
+    # Si ya hay una posicion guardada mas reciente, se usa esa: un fix antiguo del movil no debe
+    # hacer retroceder la ultima ubicacion conocida (KAN-205).
+    stored = stored_device_location()
+    stored_recorded = stored.get("recorded_at") if stored else None
+    if (stored is not None and stored_recorded is not None and stored_recorded > recorded_at
+            and reference - stored_recorded <= LOCATION_ANSWER_LAST_KNOWN_AGE):
+        return location_answer_for_point(
+            float(stored["latitude"]), float(stored["longitude"]),
+            float(stored.get("accuracy_meters") or request.accuracy_meters),
+            stored_recorded, source="last_known",
         )
-    remember_device_location(request.latitude, request.longitude, request.accuracy_meters, request.recorded_at)
+    if age <= LOCATION_ANSWER_LAST_KNOWN_AGE:
+        remember_device_location(request.latitude, request.longitude, request.accuracy_meters, recorded_at)
+        return location_answer_for_point(
+            request.latitude, request.longitude, request.accuracy_meters, recorded_at, source="gps",
+        )
+    # El fix del movil ya no es utilizable y no hay otra posicion mas reciente guardada.
+    age_minutes = max(1, int(round(age.total_seconds() / 60)))
     profile = repository.get_patient_profile()
     home = profile.home_address if profile else None
     home_label = (home.label() if home and home.label() else "Casa")
+    message = (
+        f"No consigo una ubicación reciente del móvil: la última es de hace {age_minutes} minutos. "
+        "No puedo confirmar dónde estás ahora."
+    )
     if home and home.latitude is not None and home.longitude is not None:
-        distance = distance_meters(request.latitude, request.longitude, home.latitude, home.longitude)
-        home_margin = max(35.0, min(request.accuracy_meters, 150.0))
-        if distance <= home_margin:
-            return LocationAnswer(
-                status="at_home",
-                message=f"Estás en casa, en {home_label}.",
-                place_label=home_label,
-                distance_meters=round(distance, 1),
-                accuracy_meters=request.accuracy_meters,
-            )
-    if request.accuracy_meters > 150:
-        return LocationAnswer(
-            status="refresh_required",
-            message="La ubicación todavía es aproximada. Estoy intentando afinarla.",
-            accuracy_meters=request.accuracy_meters,
-        )
-    place = reverse_geocode(request.latitude, request.longitude)
-    if place:
-        message = f"Estás cerca de {place}."
-    else:
-        message = "No parece que estés en casa."
-    if home and home.latitude is not None and home.longitude is not None:
-        distance = distance_meters(request.latitude, request.longitude, home.latitude, home.longitude)
-        direction = cardinal_direction(
-            bearing_degrees(request.latitude, request.longitude, home.latitude, home.longitude)
-        )
-        message += (
-            f" Para volver a casa, camina unos {int(round(distance))} metros hacia el {direction}; "
-            "dime cuando avances y te voy guiando."
-        )
+        message += f" Tu domicilio guardado es {home_label}."
     return LocationAnswer(
-        status="coordinates_available",
-        message=message,
-        place_label=place,
-        distance_meters=(round(distance, 1) if home and home.latitude is not None and home.longitude is not None else None),
+        status="last_known_stale", message=message, place_label=home_label if home else None,
         accuracy_meters=request.accuracy_meters,
+        age_seconds=round(age.total_seconds(), 1), location_source="gps",
+    )
+
+
+@app.get("/v1/location/last", response_model=LastKnownLocation)
+def get_last_known_location(authorization: Optional[str] = Header(default=None)) -> LastKnownLocation:
+    """KAN-205: ultima posicion conocida (persistida) para el pipeline y el portal."""
+    require_auth_or_device(authorization)
+    stored = stored_device_location()
+    if stored is None:
+        return LastKnownLocation(
+            available=False, status="none",
+            message="No tengo ninguna ubicación reciente del móvil.",
+        )
+    recorded_at = stored.get("recorded_at")
+    age = max(now() - recorded_at, timedelta(0)) if recorded_at else None
+    age_seconds = round(age.total_seconds(), 1) if age is not None else None
+    age_minutes = max(1, int(round(age.total_seconds() / 60))) if age is not None else 0
+    fresh = age is not None and age <= LOCATION_ANSWER_LAST_KNOWN_AGE
+    if fresh:
+        message = (
+            f"Tu última ubicación conocida es de hace {age_minutes} minutos."
+            if age_minutes else "Tengo una ubicación reciente del móvil."
+        )
+    else:
+        message = (
+            f"La última ubicación del móvil es de hace {age_minutes} minutos; no es reciente."
+            if age_minutes else "La ubicación guardada no es reciente."
+        )
+    return LastKnownLocation(
+        available=fresh, status="last_known" if fresh else "stale", message=message,
+        latitude=float(stored["latitude"]), longitude=float(stored["longitude"]),
+        accuracy_meters=float(stored.get("accuracy_meters") or 0),
+        recorded_at=recorded_at, age_seconds=age_seconds,
+        location_source="last_known",
     )
 
 
@@ -3359,20 +3498,67 @@ def get_onboarding(authorization: Optional[str] = Header(default=None)) -> Optio
 _LAST_DEVICE_LOCATION: dict = {}
 
 
+def _parse_location_datetime(value) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def stored_device_location() -> Optional[dict]:
+    """Ultima ubicacion del movil: cache en memoria y, si no hay, la persistida (KAN-205)."""
+    if not _LAST_DEVICE_LOCATION:
+        persisted = repository.get_last_device_location()
+        if persisted:
+            _LAST_DEVICE_LOCATION.update(persisted)
+    if not _LAST_DEVICE_LOCATION:
+        return None
+    data = dict(_LAST_DEVICE_LOCATION)
+    data["recorded_at"] = _parse_location_datetime(data.get("recorded_at"))
+    data["stored_at"] = _parse_location_datetime(data.get("stored_at"))
+    return data
+
+
 def remember_device_location(latitude: float, longitude: float, accuracy_meters: float,
                              recorded_at: Optional[datetime] = None) -> None:
-    """KAN-147: guarda la ultima ubicacion valida del dispositivo para enriquecer avisos."""
-    _LAST_DEVICE_LOCATION.update({
-        "latitude": latitude, "longitude": longitude, "accuracy_meters": accuracy_meters,
-        "recorded_at": recorded_at or now(), "stored_at": now(),
-    })
+    """KAN-147/KAN-205: guarda la ultima ubicacion valida y la persiste para avisos y consultas."""
+    stored_at = now()
+    recorded_at = _parse_location_datetime(recorded_at) or stored_at
+    if recorded_at > stored_at + LOCATION_ANSWER_FRESH_AGE:
+        recorded_at = stored_at
+    previous = stored_device_location()
+    previous_recorded = previous.get("recorded_at") if previous else None
+    if previous_recorded is not None and previous_recorded > recorded_at:
+        return
+    payload = {
+        "latitude": float(latitude), "longitude": float(longitude),
+        "accuracy_meters": float(accuracy_meters),
+        "recorded_at": recorded_at, "stored_at": stored_at,
+    }
+    _LAST_DEVICE_LOCATION.update(payload)
+    try:
+        repository.save_last_device_location({
+            "latitude": payload["latitude"], "longitude": payload["longitude"],
+            "accuracy_meters": payload["accuracy_meters"],
+            "recorded_at": recorded_at.isoformat(), "stored_at": stored_at.isoformat(),
+        })
+    except Exception as error:  # la persistencia es best-effort; la cache sigue funcionando
+        print(f"Last device location not persisted: {error}", flush=True)
 
 
 def recent_device_location(max_age: timedelta = timedelta(minutes=10)) -> Optional[dict]:
-    stored = _LAST_DEVICE_LOCATION.get("stored_at")
+    location = stored_device_location()
+    if location is None:
+        return None
+    stored = location.get("stored_at")
     if stored is None or now() - stored > max_age:
         return None
-    return dict(_LAST_DEVICE_LOCATION)
+    return location
 
 
 @app.post("/v1/emergency-alerts", response_model=EmergencyAlert, status_code=201)
@@ -3394,10 +3580,16 @@ def create_emergency_alert(request: EmergencyAlertSubmission, authorization: Opt
     if alert_request.latitude is None:
         recent = recent_device_location()
         if recent is not None:
+            recent_recorded = recent.get("recorded_at")
+            recent_is_fresh = (
+                recent_recorded is not None
+                and now() - recent_recorded <= LOCATION_ANSWER_FRESH_AGE
+            )
             alert_request = alert_request.model_copy(update={
                 "latitude": recent["latitude"], "longitude": recent["longitude"],
                 "location_accuracy_meters": recent["accuracy_meters"],
-                "location_source": "gps", "location_recorded_at": recent["recorded_at"],
+                "location_source": "gps" if recent_is_fresh else "last_known",
+                "location_recorded_at": recent_recorded,
             })
     if alert_request.latitude is None:
         # KAN-204: si el movil no ha mandado GPS, el aviso no puede salir sin ubicacion.
@@ -4602,8 +4794,10 @@ def process_camera_hazard(image: bytes, verdict: str) -> dict:
             recent = recent_device_location()
             if recent is not None:
                 latitude, longitude = recent["latitude"], recent["longitude"]
-                accuracy, source = recent["accuracy_meters"], "gps"
                 recorded_at = recent["recorded_at"]
+                accuracy = recent["accuracy_meters"]
+                source = ("gps" if recorded_at is not None
+                          and now() - recorded_at <= LOCATION_ANSWER_FRESH_AGE else "last_known")
             else:
                 profile = repository.get_patient_profile()
                 home = profile.home_address if profile else None

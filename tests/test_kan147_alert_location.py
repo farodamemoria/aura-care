@@ -26,8 +26,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     main.repository.care_contacts.clear()
     main.repository.emergency_alerts.clear()
     main.repository.last_emergency_at.clear()
+    main.repository.clear_last_device_location()
     main._LAST_DEVICE_LOCATION.clear()
-    return TestClient(main.app)
+    yield TestClient(main.app)
+    main.repository.clear_last_device_location()
+    main._LAST_DEVICE_LOCATION.clear()
 
 
 def _contact_and_capture(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tuple[list, list]:
