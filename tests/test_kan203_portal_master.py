@@ -129,3 +129,18 @@ def test_lookalike_paths_are_protected(portal: TestClient) -> None:
     assert portal.get("/assets-private/app.js").status_code == 401
     assert portal.get("/downloadx/faro.apk").status_code == 401
     assert portal.get("/.well-knownx/assetlinks.json").status_code == 401
+
+def test_service_worker_never_caches_document_or_data() -> None:
+    """KAN-203: el service worker no puede guardar el portal ni /v1/* en el navegador."""
+    sw = (ROOT / "web" / "assets" / "sw.js").read_text(encoding="utf-8")
+    assert "'/'" not in sw
+    assert "/v1/" not in sw
+    assert "pathname.startsWith('/assets/')" in sw
+
+def test_portal_app_does_not_require_url_token() -> None:
+    """KAN-203: con la contrasena maestra (Basic) el portal carga datos sin ?token=."""
+    app_js = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+    assert "Falta el enlace de acceso" not in app_js
+    boot = app_js.split("(async function boot()", 1)[1]
+    assert "if (!token)" not in boot
+    assert "await load();" in boot
