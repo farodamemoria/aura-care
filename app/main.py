@@ -2395,6 +2395,44 @@ app = FastAPI(title="AURA Care", version="0.2.0")
 web_dir = Path(__file__).resolve().parent.parent / "web"
 app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 
+# KAN-203: rutas que deben seguir siendo publicas aunque el portal tenga contrasena maestra.
+# - /health: monitorizacion sin datos personales.
+# - assetlinks/manifest: verificacion de la TWA; Android no envia credenciales.
+# - /download/: distribucion de APKs ya publicas (sin datos del paciente).
+# - whatsapp/webhook: Meta no puede enviar HTTP Basic; valida su propio token.
+PUBLIC_PORTAL_PATHS = ("/health", "/.well-known/", "/download/", "/v1/whatsapp/webhook")
+
+
+def is_public_portal_path(path: str) -> bool:
+    return any(path == prefix or path.startswith(prefix) for prefix in PUBLIC_PORTAL_PATHS)
+
+
+def build_portal_password_app(application: FastAPI) -> FastAPI:
+    """KAN-203: contrasena maestra temporal para el portal; KAN-199: sin romper rutas publicas."""
+
+    @application.middleware("http")
+    async def portal_master_password(request: Request, call_next):
+        expected = os.getenv("FARO_PORTAL_PASS", "").strip()
+        if expected and not is_public_portal_path(request.url.path):
+            provided = request.headers.get("authorization", "")
+            if provided.startswith("Bearer "):
+                return await call_next(request)
+            expected_user = os.getenv("FARO_PORTAL_USER", "faro").strip()
+            expected_b64 = base64.b64encode(f"{expected_user}:{expected}".encode()).decode()
+            if not provided.startswith("Basic ") or not secrets.compare_digest(
+                provided[6:], expected_b64
+            ):
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Faro Familia"'},
+                )
+        return await call_next(request)
+
+    return application
+
+
+build_portal_password_app(app)
+
 API_VERSION = "2026-08-26-patient-self-recognition-v1"
 
 
