@@ -1,0 +1,9 @@
+[Unit]
+Description=Faro error monitor (KAN-191)
+After=network-online.target
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+EnvironmentFile=/etc/faro/aura.env
+ExecStart=/home/ec2-user/aura-backend/.venv/bin/python /home/ec2-user/error_monitor.py
