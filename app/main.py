@@ -4501,6 +4501,11 @@ _camera_eye: dict[str, object] = {
 _camera_capture: dict[str, object] = {
     "request_id": None, "requested_at": None, "fulfilled_at": None,
 }
+_camera_watch_lock = Lock()
+_camera_watch: dict[str, object] = {
+    "last_request_at": None, "last_request_id": None,
+    "last_check_at": None, "last_check_result": None, "last_hazard_at": None,
+}
 
 
 class CameraHazardCheck(BaseModel):
@@ -4512,6 +4517,8 @@ class CameraFrameUpload(BaseModel):
     image_base64: str
     mime_type: str = "image/jpeg"
     request_id: Optional[str] = Field(default=None, max_length=64)
+    reason: str = Field(default="demand", pattern="^(demand|watch)$")
+    changed: Optional[bool] = None
 
 
 class CameraCaptureRequest(BaseModel):
@@ -4610,8 +4617,73 @@ def camera_capture_pending() -> Optional[dict]:
         }
 
 
+def _iso(value: object) -> Optional[str]:
+    return value.isoformat() if isinstance(value, datetime) else None
+
+
+def camera_watch_snapshot(patrol: Optional[CameraPatrolConfig] = None) -> dict:
+    """KAN-208: estado de la vigilancia periodica del ojo (caidas y peligros)."""
+    patrol = patrol or load_camera_patrol()
+    interval = max(30, patrol.interval_seconds)
+    with _camera_watch_lock:
+        state = dict(_camera_watch)
+    last_request = state.get("last_request_at")
+    next_check = (
+        last_request + timedelta(seconds=interval)
+        if isinstance(last_request, datetime) else None
+    )
+    return {
+        "enabled": patrol.enabled,
+        "interval_seconds": interval,
+        "last_check_at": _iso(state.get("last_check_at")),
+        "next_check_at": _iso(next_check),
+        "last_result": state.get("last_check_result"),
+        "last_hazard_at": _iso(state.get("last_hazard_at")),
+    }
+
+
+def camera_watch_request(patrol: CameraPatrolConfig) -> Optional[dict]:
+    """KAN-208: pide una foto de vigilancia si toca y la vigilancia esta activa.
+
+    La cadencia es la de la patrulla (KAN-186) y el presupuesto no bloquea la
+    vigilancia: una caida no puede perderse por quedarse sin creditos. El puente
+    solo sube el fotograma al backend cuando la escena cambia, asi que una casa
+    quieta no gasta IA.
+    """
+    if not patrol.enabled:
+        return None
+    interval = max(30, patrol.interval_seconds)
+    current = now()
+    with _camera_watch_lock:
+        previous = _camera_watch.get("last_request_at")
+        if isinstance(previous, datetime) and current - previous < timedelta(seconds=interval):
+            return None
+        request_id = f"watch-{uuid4().hex}"
+        _camera_watch["last_request_at"] = current
+        _camera_watch["last_request_id"] = request_id
+    return {
+        "request_id": request_id,
+        "requested_at": current.isoformat(),
+        "age_seconds": 0,
+        "reason": "watch",
+        "note": "vigilancia",
+    }
+
+
+def camera_watch_record(result: dict) -> None:
+    """KAN-208: guarda el resultado de la ultima pasada de vigilancia."""
+    with _camera_watch_lock:
+        _camera_watch["last_check_at"] = now()
+        _camera_watch["last_check_result"] = result
+        if result.get("hazard"):
+            _camera_watch["last_hazard_at"] = now()
+
+
 def camera_hazard_kind(verdict: str) -> str:
     upper = verdict.upper()
+    if any(word in upper for word in ("CAID", "CAÍD", "SUELO", "GOLPE", "TUMBAD", "DESMAY")):
+        # KAN-208: una persona en el suelo manda sobre otros objetos de la escena.
+        return "dangerous_impact"
     if "FUEGO" in upper or "HUMO" in upper or "INCENDIO" in upper:
         return "smoke_or_fire"
     if "CRISTAL" in upper or "VIDRIO" in upper:
@@ -4852,6 +4924,11 @@ def process_camera_hazard(image: bytes, verdict: str) -> dict:
         },
     ))
     repository.enqueue_voice_reminder(hazard_event.id, spoken_text, kind="hazard")
+    if family_alert_status not in ("sent", "test_mode"):
+        # KAN-208: si el aviso no salio, la siguiente pasada de vigilancia reintenta.
+        with _camera_hazard_lock:
+            if _camera_hazard_last.get(kind) == checked_at:
+                _camera_hazard_last.pop(kind, None)
     return {
         "hazard": True, "kind": kind, "verdict": verdict[:400],
         "family_alert_status": family_alert_status,
@@ -4879,10 +4956,22 @@ def upload_camera_frame(
     if not image or len(image) > 8 * 1024 * 1024:
         raise HTTPException(status_code=422, detail="Image size out of range")
     mime_type = request.mime_type if request.mime_type.startswith("image/") else "image/jpeg"
+    is_watch = request.reason == "watch" or str(request.request_id or "").startswith("watch-")
     _LAST_CAMERA_FRAME["at"] = now()
     patrol = load_camera_patrol()
+    if request.changed is False:
+        # KAN-208: escena identica -> se refresca el preview pero no se gasta IA.
+        camera_eye_store(image, mime_type, None, False, None, None, request.request_id)
+        result = {
+            "ok": True, "captured_at": now().isoformat(), "description": None,
+            "hazard": False, "skipped": "no_change",
+            "reason": "watch" if is_watch else "demand",
+        }
+        if is_watch:
+            camera_watch_record(result)
+        return result
     _, within_budget = bump_camera_usage(patrol.daily_budget)
-    if not within_budget:
+    if not within_budget and not is_watch:
         evidence_key = store_camera_evidence(image, "preview")
         camera_eye_store(
             image, mime_type, None, False, None, evidence_key, request.request_id,
@@ -4890,6 +4979,7 @@ def upload_camera_frame(
         return {
             "ok": True, "captured_at": now().isoformat(), "description": None,
             "hazard": False, "skipped": "budget", "evidence_key": evidence_key,
+            "reason": "demand",
         }
     verdict = describe_camera_scene(request.image_base64, mime_type)
     hazard = verdict.strip().upper().startswith("PELIGRO")
@@ -4905,7 +4995,7 @@ def upload_camera_frame(
     camera_eye_store(
         image, mime_type, description, hazard, kind, evidence_key, request.request_id,
     )
-    return {
+    payload = {
         "ok": True,
         "captured_at": now().isoformat(),
         "description": description,
@@ -4915,7 +5005,11 @@ def upload_camera_frame(
         "evidence_key": evidence_key,
         "family_alert_status": result.get("family_alert_status"),
         "spoken": result.get("spoken"),
+        "reason": "watch" if is_watch else "demand",
     }
+    if is_watch:
+        camera_watch_record(payload)
+    return payload
 
 
 @app.get("/v1/camera/status")
@@ -4941,6 +5035,7 @@ def get_camera_eye_status(
         "has_preview": eye.get("image") is not None,
         "pending_capture": pending,
         "patrol_enabled": patrol.enabled,
+        "watch": camera_watch_snapshot(patrol),
         "budget": {
             "day": day, "used": used, "budget": patrol.daily_budget,
             "remaining": max(0, patrol.daily_budget - used),
@@ -4983,16 +5078,20 @@ def request_camera_capture(
 def take_camera_capture_request(
     authorization: Optional[str] = Header(default=None),
 ) -> Response:
-    """KAN-178: el puente local pregunta si hay una captura pedida (204 si no hay)."""
+    """KAN-178/KAN-208: el puente local pregunta si hay una captura pedida o de vigilancia (204 si no)."""
     require_auth(authorization)
     pending = camera_capture_pending()
-    if pending is None:
-        return Response(status_code=204, headers={"Cache-Control": "no-store"})
-    return JSONResponse({
-        "request_id": pending["request_id"],
-        "requested_at": pending["requested_at"].isoformat(),
-        "age_seconds": pending["age_seconds"],
-    }, headers={"Cache-Control": "no-store"})
+    if pending is not None:
+        return JSONResponse({
+            "request_id": pending["request_id"],
+            "requested_at": pending["requested_at"].isoformat(),
+            "age_seconds": pending["age_seconds"],
+            "reason": "demand",
+        }, headers={"Cache-Control": "no-store"})
+    watch = camera_watch_request(load_camera_patrol())
+    if watch is not None:
+        return JSONResponse(watch, headers={"Cache-Control": "no-store"})
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/track/{share_token}", response_class=HTMLResponse, include_in_schema=False)
