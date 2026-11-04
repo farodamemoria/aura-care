@@ -772,6 +772,10 @@ def location_age_minutes(recorded_at: Optional[datetime], reference: Optional[da
     return max(0, int((reference - recorded_at).total_seconds() // 60))
 
 
+def minutes_label(minutes: int) -> str:
+    return "1 minuto" if minutes == 1 else f"{minutes} minutos"
+
+
 def build_alert_message(
     alert: EmergencyAlertCreate, reference: Optional[datetime] = None,
     home_label: Optional[str] = None,
@@ -3286,10 +3290,10 @@ def location_answer_for_point(
     age_minutes = max(1, int(round(age.total_seconds() / 60))) if age.total_seconds() >= 30 else 0
     prefix = ""
     if source == "last_known":
-        prefix = (f"Según tu última ubicación, hace {age_minutes} minutos, "
+        prefix = (f"Según tu última ubicación, hace {minutes_label(age_minutes)}, "
                   if age_minutes else "Según tu última ubicación, ")
     elif stale:
-        prefix = f"Tu última ubicación es de hace {age_minutes} minutos: "
+        prefix = f"Tu última ubicación es de hace {minutes_label(age_minutes)}: "
 
     profile = repository.get_patient_profile()
     home = profile.home_address if profile else None
@@ -3369,7 +3373,7 @@ def answer_location_question(
     home = profile.home_address if profile else None
     home_label = (home.label() if home and home.label() else "Casa")
     message = (
-        f"No consigo una ubicación reciente del móvil: la última es de hace {age_minutes} minutos. "
+        f"No consigo una ubicación reciente del móvil: la última es de hace {minutes_label(age_minutes)}. "
         "No puedo confirmar dónde estás ahora."
     )
     if home and home.latitude is not None and home.longitude is not None:
@@ -3398,12 +3402,12 @@ def get_last_known_location(authorization: Optional[str] = Header(default=None))
     fresh = age is not None and age <= LOCATION_ANSWER_LAST_KNOWN_AGE
     if fresh:
         message = (
-            f"Tu última ubicación conocida es de hace {age_minutes} minutos."
+            f"Tu última ubicación conocida es de hace {minutes_label(age_minutes)}."
             if age_minutes else "Tengo una ubicación reciente del móvil."
         )
     else:
         message = (
-            f"La última ubicación del móvil es de hace {age_minutes} minutos; no es reciente."
+            f"La última ubicación del móvil es de hace {minutes_label(age_minutes)}; no es reciente."
             if age_minutes else "La ubicación guardada no es reciente."
         )
     return LastKnownLocation(
