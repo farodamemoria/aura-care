@@ -2448,13 +2448,15 @@ app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 # - assetlinks/manifest: verificacion de la TWA; Android no envia credenciales.
 # - /download/: distribucion de APKs ya publicas (sin datos del paciente).
 # - whatsapp/webhook: Meta no puede enviar HTTP Basic; valida su propio token.
-# - /assets/: cascaron estatico del portal (HTML/CSS/JS/iconos), sin datos del paciente;
-#   la TWA y el service worker no pueden enviar credenciales al cargar.
-# - /: index del portal (cascaron); los datos siguen detras de Bearer en /v1/*.
+# - /assets/: cascaron estatico del portal (CSS/JS/iconos), sin datos del paciente; la TWA y
+#   el service worker los piden sin credenciales.
+# El documento "/" y todas las rutas de datos (/v1/*, imagenes de camara) SI exigen credenciales:
+# con la contrasena maestra (HTTP Basic) o con el Bearer de las apps.
 PUBLIC_PORTAL_PATHS = (
     "/.well-known/", "/download/", "/v1/whatsapp/webhook", "/assets/",
 )
-PUBLIC_PORTAL_EXACT_PATHS = ("/", "/health")
+PUBLIC_PORTAL_EXACT_PATHS = ("/health",)
+DEFAULT_PORTAL_HOSTS = "farofamilia.loginea.com"
 
 
 def is_public_portal_path(path: str) -> bool:
@@ -2463,31 +2465,57 @@ def is_public_portal_path(path: str) -> bool:
     )
 
 
+def portal_hosts() -> tuple[str, ...]:
+    raw = os.getenv("FARO_PORTAL_HOSTS", DEFAULT_PORTAL_HOSTS)
+    return tuple(host.strip().casefold() for host in raw.split(",") if host.strip())
+
+
+def is_portal_host(host: str) -> bool:
+    value = (host or "").strip().split(":")[0].casefold()
+    return bool(value) and value in portal_hosts()
+
+
 def build_portal_password_app(application: FastAPI) -> FastAPI:
-    """KAN-203: contrasena maestra temporal para el portal; KAN-199: sin romper rutas publicas."""
+    """KAN-203: la contrasena maestra abre el portal Y sus llamadas a la API.
+
+    Sin credenciales -> 401 (el navegador pide usuario/contrasena en el portal). Con la
+    contrasena maestra -> se inyecta un Bearer de sesion firmado para esa peticion, de modo
+    que el portal queda operativo sin exponer ningun token en el cliente. Las apps siguen
+    entrando con su Bearer de siempre.
+    """
 
     @application.middleware("http")
     async def portal_master_password(request: Request, call_next):
         expected = os.getenv("FARO_PORTAL_PASS", "").strip()
-        if expected and not is_public_portal_path(request.url.path):
-            provided = request.headers.get("authorization", "")
-            if provided.startswith("Bearer "):
-                return await call_next(request)
-            expected_user = os.getenv("FARO_PORTAL_USER", "faro").strip()
-            expected_b64 = base64.b64encode(f"{expected_user}:{expected}".encode()).decode()
-            if not provided.startswith("Basic ") or not secrets.compare_digest(
-                provided[6:], expected_b64
-            ):
-                return Response(
-                    status_code=401,
-                    headers={"WWW-Authenticate": 'Basic realm="Faro Familia"'},
+        if not expected or is_public_portal_path(request.url.path):
+            return await call_next(request)
+        provided = request.headers.get("authorization", "")
+        if provided.casefold().startswith("bearer "):
+            return await call_next(request)
+        portal_host = is_portal_host(request.headers.get("host", ""))
+        expected_user = os.getenv("FARO_PORTAL_USER", "faro").strip()
+        expected_b64 = base64.b64encode(f"{expected_user}:{expected}".encode()).decode()
+        if provided.startswith("Basic ") and secrets.compare_digest(provided[6:], expected_b64):
+            try:
+                session_token, _ = issue_session_token(
+                    configured_care_circle_id(), role="family", subject="portal-master-password",
                 )
-        return await call_next(request)
+            except HTTPException:
+                return Response(status_code=503, headers={"Cache-Control": "no-store"})
+            request.scope["headers"] = [
+                (name, value)
+                for name, value in request.scope.get("headers", [])
+                if name.lower() != b"authorization"
+            ] + [(b"authorization", f"Bearer {session_token}".encode())]
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Vary"] = "Authorization"
+            return response
+        challenge = {"WWW-Authenticate": 'Basic realm="Faro Familia"'} if portal_host else {}
+        challenge["Cache-Control"] = "no-store"
+        return Response(status_code=401, headers=challenge)
 
     return application
-
-
-build_portal_password_app(app)
 
 API_VERSION = "2026-08-26-patient-self-recognition-v1"
 
@@ -2622,6 +2650,9 @@ def extract_bearer(authorization: Optional[str]) -> str:
     if separator != " " or scheme.casefold() != "bearer" or not credential:
         raise HTTPException(status_code=401, detail="Device authentication required")
     return credential
+
+
+build_portal_password_app(app)
 
 
 def enabled_alert_contacts() -> list[CareContact]:

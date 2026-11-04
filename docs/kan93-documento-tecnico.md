@@ -334,7 +334,7 @@ Camaras locales (KAN-178):
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v64`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v66`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.
@@ -413,6 +413,8 @@ está en un repositorio local.
   `/etc/aura-backend/openai.env`, `/etc/faro/realtime.env`.
 
 ## 9. Seguridad, privacidad y datos
+
+- **KAN-203**: sin credenciales, arofamilia.loginea.com responde 401 en el documento y en todas las rutas de datos (/v1/*, incluidas las imagenes de la camara Tapo); con la contrasena maestra (HTTP Basic, FARO_PORTAL_USER/FARO_PORTAL_PASS) responde 200 y el portal queda operativo, porque el backend inyecta un Bearer de sesion firmado. Las apps siguen entrando con su Bearer en pi.loginea.com. El service worker solo cachea /assets/*, nunca el documento ni datos.
 
 - Alta con **consentimiento explícito** y revocable; cinco muestras por persona; borrado completo
   al eliminar (`DELETE /v1/people/{person_id}`).

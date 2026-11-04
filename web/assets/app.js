@@ -1912,11 +1912,8 @@ if (agendaRecurrence && agendaWeekdays) {
 }
 
 (async function boot() {
-  if (!token) {
-    document.querySelector('#connection').textContent = 'Acceso no autorizado';
-    notify(new Error('Falta el enlace de acceso. Abre el portal con un enlace válido (?token=...).'));
-    return;
-  }
+  // KAN-203: con la contrasena maestra el navegador envia HTTP Basic en las peticiones del
+  // mismo origen; no hace falta token en la URL. El enlace ?token= sigue funcionando.
   try {
     const health = await fetch('/health').then(response => response.json());
     document.querySelector('#connection').textContent = `Conectado · ${health.face_provider === 'RekognitionFaceProvider' ? 'reconocimiento activo' : 'modo de prueba'}`;
