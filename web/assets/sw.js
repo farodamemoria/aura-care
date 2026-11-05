@@ -1,5 +1,5 @@
-const CACHE='faro-familia-v66';
-const ASSETS=['/assets/app.css?v=7','/assets/events.css?v=3','/assets/people.css?v=2','/assets/care.css?v=2','/assets/patient.css?v=2','/assets/family.css?v=4','/assets/agenda.css?v=2','/assets/tokens.css?v=8','/assets/logo-light.svg','/assets/logo-dark.svg','/assets/icon.svg','/assets/icon-180.png','/assets/icon-192.png','/assets/icon-512.png','/assets/app.js?v=54','/assets/manifest.webmanifest'];
+const CACHE='faro-familia-v67';
+const ASSETS=['/assets/app.css?v=8','/assets/events.css?v=3','/assets/people.css?v=2','/assets/care.css?v=2','/assets/patient.css?v=2','/assets/family.css?v=4','/assets/agenda.css?v=2','/assets/tokens.css?v=8','/assets/logo-light.svg','/assets/logo-dark.svg','/assets/icon.svg','/assets/icon-180.png','/assets/icon-192.png','/assets/icon-512.png','/assets/app.js?v=55','/assets/manifest.webmanifest'];
 
 // KAN-203: el documento del portal y los datos personales nunca se guardan en la cache del
 // navegador; solo se cachean los estaticos publicos para que el portal cargue rapido.
