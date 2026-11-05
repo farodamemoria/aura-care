@@ -97,3 +97,9 @@ def test_errors_outside_window_are_ignored() -> None:
     _insert(conn, "eeee5555ffff6666", created_at=old)
     summary = monitor.process(conn, lambda first, n: "KAN-2", lambda key, body: None, hours=24)
     assert summary["procesados"] == 0
+
+
+def test_systemd_service_runs_the_deployed_repo_script() -> None:
+    unit = (ROOT / "scripts" / "systemd" / "faro-error-monitor.service").read_text(encoding="utf-8")
+    assert "/home/ec2-user/aura-backend/scripts/error_monitor.py" in unit
+    assert " /home/ec2-user/error_monitor.py" not in unit
