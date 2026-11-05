@@ -308,7 +308,9 @@ Rastreadores vinculados (KAN-165):
 
 Vistas en directo (KAN-75):
 
-- `GET /v1/live-views`, `POST /v1/live-views`, `POST /v1/live-views/{view_id}/status`.
+- `GET /v1/live-views`, `GET /v1/live-views/{view_id}`, `POST /v1/live-views`,
+  `POST /v1/live-views/{view_id}/frame`, `GET /v1/live-views/{view_id}/frame`,
+  `POST /v1/live-views/{view_id}/status`.
 
 Ayuda al familiar (KAN-73):
 
@@ -335,7 +337,7 @@ Camaras locales (KAN-178):
 
 - **Stack**: HTML5, CSS y JavaScript **vanilla** (sin framework ni build). PWA instalable mediante
   `web/assets/manifest.webmanifest` (`display: standalone`, idioma `es`) y **service worker**
-  (`web/assets/sw.js`, caché `faro-familia-v66`) con estrategia «red primero, caché de respaldo».
+  (`web/assets/sw.js`, caché `faro-familia-v67`) con estrategia «red primero, caché de respaldo».
 - **Estructura**: `web/index.html` (vistas), `web/assets/app.js` (lógica y llamadas a la API),
   y las hojas `web/assets/app.css` + `events.css` + `people.css` + `care.css` + `patient.css` +
   `family.css` + `agenda.css`.

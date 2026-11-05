@@ -1115,6 +1115,16 @@ class LiveViewRequest(BaseModel):
     status: str = Field(pattern="^(pending|active|completed|cancelled|denied)$")
     created_at: datetime
     updated_at: datetime
+    frame_count: int = 0
+    last_frame_at: Optional[datetime] = None
+
+
+class LiveViewFrameAck(BaseModel):
+    id: UUID
+    status: str
+    frame_count: int
+    received_bytes: int
+    last_frame_at: datetime
 
 
 class HelpProtocolContact(BaseModel):
@@ -1388,6 +1398,11 @@ class InMemoryRepository:
             else (self.data_file.parent / "alert-images") if self.data_file else Path("alert-images")
         )
         self.alert_images_dir.mkdir(parents=True, exist_ok=True)
+        self.live_view_frames_dir = (
+            Path(os.environ["AURA_LIVE_VIEW_DIR"]) if os.getenv("AURA_LIVE_VIEW_DIR")
+            else (self.data_file.parent / "live-view-frames") if self.data_file else Path("live-view-frames")
+        )
+        self.live_view_frames_dir.mkdir(parents=True, exist_ok=True)
         self.people: dict[UUID, Person] = {}
         if self.data_file and self.data_file.exists():
             for raw in json.loads(self.data_file.read_text(encoding="utf-8")):
@@ -1675,6 +1690,29 @@ class InMemoryRepository:
     def load_alert_image(self, alert_id: UUID) -> Optional[bytes]:
         path = self.alert_images_dir / f"{alert_id}.jpg"
         return path.read_bytes() if path.exists() else None
+
+    def save_live_view_frame(self, view_id: UUID, image: bytes, extension: str) -> None:
+        """KAN-209: guarda el ultimo fotograma de la transmision (se sobrescribe en cada uno)."""
+        for other in (".jpg", ".png"):
+            if other != extension:
+                stale = self.live_view_frames_dir / f"{view_id}{other}"
+                if stale.exists():
+                    stale.unlink(missing_ok=True)
+        path = self.live_view_frames_dir / f"{view_id}{extension}"
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_bytes(image)
+        os.replace(temporary, path)
+
+    def load_live_view_frame(self, view_id: UUID) -> Optional[tuple[bytes, str]]:
+        for extension, mime_type in ((".jpg", "image/jpeg"), (".png", "image/png")):
+            path = self.live_view_frames_dir / f"{view_id}{extension}"
+            if path.exists():
+                return path.read_bytes(), mime_type
+        return None
+
+    def clear_live_view_frame(self, view_id: UUID) -> None:
+        for extension in (".jpg", ".png"):
+            (self.live_view_frames_dir / f"{view_id}{extension}").unlink(missing_ok=True)
 
     def delete_review_evidence(self, review_id: UUID) -> None:
         path = self._review_evidence_path(review_id)
@@ -6099,10 +6137,59 @@ def update_video_consent(request: VideoConsentUpdate, authorization: Optional[st
     return repository.device_inventory()
 
 
+LIVE_VIEW_FRAME_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _live_view_or_404(view_id: UUID) -> LiveViewRequest:
+    view = repository.live_views.get(view_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Live view request not found")
+    return view
+
+
+def _live_view_image_extension(content_type: str, data: bytes) -> str:
+    """KAN-209: solo imagenes reales; el fotograma se sirve con su MIME correcto."""
+    declared = (content_type or "").split(";")[0].strip().lower()
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    raise HTTPException(status_code=415, detail="Frame must be a JPEG or PNG image")
+
+
+def _check_live_view_device_source(view_source: str, device_source: Optional[str]) -> None:
+    if not device_source:
+        return
+    if device_source not in ("glasses", "phone") or device_source != view_source:
+        raise HTTPException(status_code=403, detail="Device source does not match the request")
+
+
 @app.get("/v1/live-views", response_model=list[LiveViewRequest])
-def list_live_views(authorization: Optional[str] = Header(default=None)) -> list[LiveViewRequest]:
-    require_auth(authorization)
-    return sorted(repository.live_views.values(), key=lambda item: item.created_at, reverse=True)
+def list_live_views(
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+    x_faro_device_source: Optional[str] = Header(default=None, alias="X-Faro-Device-Source"),
+) -> list[LiveViewRequest]:
+    """KAN-209: el portal ve todas; las apps filtran por su fuente y estado para atenderlas."""
+    require_auth_or_device(authorization)
+    if x_faro_device_source and source and x_faro_device_source != source:
+        raise HTTPException(status_code=403, detail="Device source does not match the filter")
+    if source is not None and source not in ("glasses", "phone"):
+        raise HTTPException(status_code=422, detail="source must be glasses or phone")
+    if status is not None and status not in ("pending", "active", "completed", "cancelled", "denied"):
+        raise HTTPException(status_code=422, detail="invalid status")
+    views = [
+        view for view in repository.live_views.values()
+        if (source is None or view.source == source) and (status is None or view.status == status)
+    ]
+    return sorted(views, key=lambda item: item.created_at, reverse=True)
+
+
+@app.get("/v1/live-views/{view_id}", response_model=LiveViewRequest)
+def get_live_view(view_id: UUID, authorization: Optional[str] = Header(default=None)) -> LiveViewRequest:
+    require_auth_or_device(authorization)
+    return _live_view_or_404(view_id)
 
 
 @app.post("/v1/live-views", response_model=LiveViewRequest, status_code=201)
@@ -6128,16 +6215,80 @@ def create_live_view(request: LiveViewRequestCreate, authorization: Optional[str
     return view
 
 
-@app.post("/v1/live-views/{view_id}/status", response_model=LiveViewRequest)
-def update_live_view_status(view_id: UUID, request: LiveViewStatusUpdate, authorization: Optional[str] = Header(default=None)) -> LiveViewRequest:
-    """KAN-75 Fase 2: transiciones auditadas de la solicitud (activa/terminada/cancelada/denegada)."""
+@app.post("/v1/live-views/{view_id}/frame", response_model=LiveViewFrameAck, status_code=202)
+async def upload_live_view_frame(
+    view_id: UUID,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_faro_device_source: Optional[str] = Header(default=None, alias="X-Faro-Device-Source"),
+) -> LiveViewFrameAck:
+    """KAN-209: la app envia el ultimo fotograma; el portal lo consulta en GET /frame."""
+    require_auth_or_device(authorization)
+    view = _live_view_or_404(view_id)
+    _check_live_view_device_source(view.source, x_faro_device_source)
+    if view.status in ("completed", "cancelled", "denied"):
+        raise HTTPException(status_code=409, detail="Live view request is closed")
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=422, detail="Frame is empty")
+    if len(data) > LIVE_VIEW_FRAME_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Frame is too large")
+    extension = _live_view_image_extension(request.headers.get("content-type", ""), data)
+    moment = now()
+    repository.save_live_view_frame(view.id, data, extension)
+    became_active = view.status == "pending"
+    updated = view.model_copy(update={
+        "status": "active" if became_active else view.status,
+        "frame_count": view.frame_count + 1,
+        "last_frame_at": moment,
+        "updated_at": moment,
+    })
+    repository.live_views[view.id] = updated
+    repository.save_live_views()
+    if became_active:
+        repository.add_event(EventCreate(
+            kind="caregiver_action",
+            summary=f"Transmision en directo ({view.source}): active",
+            source=view.source,
+            severity="info",
+            metadata={
+                "action": "live_view_status", "source": view.source, "status": "active",
+                "trigger": "first_frame",
+            },
+        ))
+    return LiveViewFrameAck(
+        id=updated.id, status=updated.status, frame_count=updated.frame_count,
+        received_bytes=len(data), last_frame_at=moment,
+    )
+
+
+@app.get("/v1/live-views/{view_id}/frame")
+def get_live_view_frame(view_id: UUID, authorization: Optional[str] = Header(default=None)) -> Response:
+    """KAN-209: ultimo fotograma para el visor del portal (nunca se cachea)."""
     require_auth(authorization)
-    view = repository.live_views.get(view_id)
-    if view is None:
-        raise HTTPException(status_code=404, detail="Live view request not found")
+    _live_view_or_404(view_id)
+    frame = repository.load_live_view_frame(view_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No frame received yet")
+    data, mime_type = frame
+    return Response(content=data, media_type=mime_type, headers={"Cache-Control": "no-store, private"})
+
+
+@app.post("/v1/live-views/{view_id}/status", response_model=LiveViewRequest)
+def update_live_view_status(
+    view_id: UUID, request: LiveViewStatusUpdate,
+    authorization: Optional[str] = Header(default=None),
+    x_faro_device_source: Optional[str] = Header(default=None, alias="X-Faro-Device-Source"),
+) -> LiveViewRequest:
+    """KAN-75 Fase 2: transiciones auditadas de la solicitud (activa/terminada/cancelada/denegada)."""
+    require_auth_or_device(authorization)
+    view = _live_view_or_404(view_id)
+    _check_live_view_device_source(view.source, x_faro_device_source)
     updated = view.model_copy(update={"status": request.status, "updated_at": now()})
     repository.live_views[view.id] = updated
     repository.save_live_views()
+    if request.status in ("completed", "cancelled", "denied"):
+        repository.clear_live_view_frame(view.id)
     repository.add_event(EventCreate(
         kind="caregiver_action",
         summary=f"Transmision en directo ({view.source}): {request.status}",

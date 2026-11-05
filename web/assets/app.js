@@ -1273,6 +1273,106 @@ function permissionsForm(kind, settings) {
   return form;
 }
 
+let activeLiveView = null;
+
+function stopLiveView() {
+  if (activeLiveView) {
+    clearInterval(activeLiveView.timer);
+    if (activeLiveView.url) URL.revokeObjectURL(activeLiveView.url);
+    activeLiveView = null;
+  }
+  const host = document.querySelector('#live-view');
+  if (host) { host.replaceChildren(); host.hidden = true; }
+}
+
+function renderLiveView(view) {
+  stopLiveView();
+  const host = document.querySelector('#live-view');
+  if (!host) return;
+  host.hidden = false;
+  const panel = document.createElement('article');
+  panel.className = 'device-card device-card--live-viewer';
+  const head = document.createElement('div');
+  head.className = 'device-card-head';
+  const title = document.createElement('strong');
+  title.textContent = `Directo de ${DEVICE_LABELS[view.source] || view.source}`;
+  const state = statusChip(true, 'Conectando…', 'Conectando…');
+  head.append(title, state);
+  const image = document.createElement('img');
+  image.className = 'live-view-image';
+  image.alt = `Transmisión en directo de ${DEVICE_LABELS[view.source] || view.source}`;
+  image.hidden = true;
+  const meta = document.createElement('p');
+  meta.className = 'device-meta';
+  meta.textContent = 'Esperando el primer fotograma del dispositivo…';
+  const actions = document.createElement('div');
+  actions.className = 'device-actions';
+  const stop = document.createElement('button');
+  stop.type = 'button';
+  stop.className = 'secondary';
+  stop.textContent = 'Detener transmisión';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'secondary';
+  close.textContent = 'Cerrar visor';
+  actions.append(stop, close);
+  panel.append(head, image, meta, actions);
+  host.append(panel);
+
+  const session = {viewId: view.id, source: view.source, timer: null, url: null, frames: 0, stopped: false};
+  activeLiveView = session;
+
+  const finish = async (label) => {
+    if (session.stopped) return;
+    session.stopped = true;
+    clearInterval(session.timer);
+    state.replaceWith(statusChip(false, label, label));
+    meta.textContent = 'Transmisión finalizada.';
+    stop.disabled = true;
+    if (session.url) { URL.revokeObjectURL(session.url); session.url = null; }
+  };
+
+  const tick = async () => {
+    if (session.stopped) return;
+    try {
+      const status = await api(`/v1/live-views/${session.viewId}`);
+      if (status.status === 'completed' || status.status === 'cancelled' || status.status === 'denied') {
+        await finish(DEVICE_VIEW_LABELS[status.status] || status.status);
+        return;
+      }
+      if (status.frame_count > session.frames) {
+        const response = await fetch(`/v1/live-views/${session.viewId}/frame`, {headers: authHeaders, cache: 'no-store'});
+        if (response.ok) {
+          const blob = await response.blob();
+          if (session.url) URL.revokeObjectURL(session.url);
+          session.url = URL.createObjectURL(blob);
+          image.src = session.url;
+          image.hidden = false;
+          session.frames = status.frame_count;
+          meta.textContent = `Recibidos ${status.frame_count} fotograma(s) · último ${new Date(status.last_frame_at).toLocaleTimeString()}`;
+          state.replaceWith(statusChip(true, 'En directo', 'En directo'));
+        }
+      }
+    } catch (error) {
+      if (error && error.message && /404|No frame/i.test(error.message)) return;
+      await finish('Sin conexión');
+    }
+  };
+
+  stop.onclick = async () => {
+    stop.disabled = true;
+    try {
+      await api(`/v1/live-views/${session.viewId}/status`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status: 'completed'})});
+    } catch (error) { notify(error); }
+    await finish('Finalizada');
+    await load();
+  };
+  close.onclick = () => { finish('Finalizada'); load(); };
+
+  tick();
+  session.timer = setInterval(tick, 1200);
+}
+
 function liveViewButton(kind, inventory) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -1284,9 +1384,10 @@ function liveViewButton(kind, inventory) {
   button.onclick = async () => {
     button.disabled = true;
     try {
-      await api('/v1/live-views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({source: kind, reason: 'Petición desde Faro Familia'})});
-      toast('Solicitud registrada y auditada. El vídeo en directo llegará en la fase 3.', 'success');
-      await load();
+      const view = await api('/v1/live-views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({source: kind, reason: 'Petición desde Faro Familia'})});
+      toast('Solicitud enviada. Esperando al dispositivo…', 'success');
+      renderLiveView(view);
+      load();
     } catch (error) { notify(error); } finally { button.disabled = false; }
   };
   return button;
@@ -1448,6 +1549,13 @@ function renderDevices(inventory, liveViews, trackers) {
     meta.textContent = new Date(view.created_at).toLocaleString();
     card.append(head, meta);
     if (view.status === 'pending' || view.status === 'active') {
+      const actions = document.createElement('div');
+      actions.className = 'device-actions';
+      const watch = document.createElement('button');
+      watch.type = 'button';
+      watch.className = 'primary';
+      watch.textContent = view.frame_count ? 'Ver en directo' : 'Abrir visor';
+      watch.onclick = () => renderLiveView(view);
       const cancel = document.createElement('button');
       cancel.type = 'button';
       cancel.className = 'secondary';
@@ -1460,7 +1568,14 @@ function renderDevices(inventory, liveViews, trackers) {
           await load();
         } catch (error) { notify(error); } finally { cancel.disabled = false; }
       };
-      card.append(cancel);
+      actions.append(watch, cancel);
+      card.append(actions);
+    }
+    if (view.frame_count) {
+      const frames = document.createElement('p');
+      frames.className = 'device-meta';
+      frames.textContent = `${view.frame_count} fotograma(s) recibidos`;
+      card.append(frames);
     }
     transmissions.body.append(card);
   });
