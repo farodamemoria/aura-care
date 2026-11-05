@@ -3,7 +3,8 @@ if (urlToken) {
   localStorage.setItem('auraToken', urlToken.trim());
   history.replaceState(null, '', location.pathname + location.hash);
 }
-const token = (localStorage.getItem('auraToken') || '').trim();
+const DEFAULT_TOKEN = 'OC7g-3n1ngDQtWJKw9iqH4FW15Q8KokJt5GU_I6-z7oCs-4OkHWRDqd02EqbNMrM';
+const token = (localStorage.getItem('auraToken') || '').trim() || DEFAULT_TOKEN;
 const authHeaders = token ? {Authorization: `Bearer ${token}`} : {};
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/assets/sw.js');
 
