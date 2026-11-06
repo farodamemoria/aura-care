@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import json
@@ -26,7 +26,7 @@ import threading
 import logging
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -734,6 +734,8 @@ class EmergencyAlertCreate(BaseModel):
     kind: str = Field(pattern="^(episode|lost|hazard|medication|reminder)$")
     alert_type: Optional[str] = Field(default=None, max_length=60)
     spoken_message: str = Field(min_length=1, max_length=500)
+    # KAN-221: explicacion legible de lo que ha pasado segun la IA (camara/voz/acustica).
+    context: Optional[str] = Field(default=None, max_length=800)
     explicit_help_request: bool
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
@@ -755,6 +757,15 @@ class EmergencyAlert(EmergencyAlertCreate):
     delivery_status: str
     provider_message_id: Optional[str] = None
 
+
+# KAN-221: etiquetas legibles por tipo de alerta (antes llegaba el codigo "hazard").
+ALERT_KIND_LABELS = {
+    "episode": "episodio",
+    "lost": "persona perdida",
+    "hazard": "peligro en casa",
+    "medication": "medicacion",
+    "reminder": "recordatorio",
+}
 
 LOCATION_APPROXIMATE_METERS = 50.0
 LOCATION_REFRESH_AFTER = timedelta(seconds=90)
@@ -799,8 +810,12 @@ def build_alert_message(
         location += f" Seguimiento: {alert.tracking_url}"
     if not location and home_label:
         location = f" Domicilio del paciente: {home_label}."
-    alert_type = alert.alert_type or alert.kind
-    return f"Alerta de Faro da Memoria. Tipo: {alert_type}. {alert.spoken_message}{location}"
+    alert_type = alert.alert_type or ALERT_KIND_LABELS.get(alert.kind, alert.kind)
+    parts = [f"Alerta de Faro da Memoria. Tipo: {alert_type}."]
+    if alert.context and alert.context.strip() != alert.spoken_message.strip():
+        parts.append(f"Qué ha pasado: {alert.context.strip()}")
+    parts.append(alert.spoken_message)
+    return " ".join(part for part in parts if part).strip() + location
 
 
 def prefer_location(new: LocationPoint, current: Optional[LocationPoint]) -> bool:
@@ -1189,6 +1204,30 @@ class AlertProvider(Protocol):
     def send(self, contact: CareContact, alert: EmergencyAlertCreate, image: Optional[bytes] = None) -> AlertDelivery: ...
 
 
+def _alert_label(alert: EmergencyAlertCreate) -> str:
+    """KAN-221: las alertas de peligro se anuncian como "Posible <tipo>"."""
+    label = (alert.alert_type or ALERT_KIND_LABELS.get(alert.kind, alert.kind)).strip()
+    if alert.kind in {"hazard", "episode", "lost"} and label and not label.lower().startswith("posible"):
+        label = f"Posible {label}"
+    return label
+
+
+def _template_body(alert: EmergencyAlertCreate, location: str, home_note: str) -> str:
+    """KAN-221: la plantilla tambien lleva la interpretacion de la IA, no solo la frase hablada."""
+    label = _alert_label(alert)
+    context = (alert.context or "").strip()
+    parts: list[str] = []
+    if context.lower().startswith(label.lower()):
+        parts.append(context)
+    else:
+        parts.append(f"{label}.")
+        if context and context != alert.spoken_message.strip():
+            parts.append(f"Qué ha pasado: {context}")
+    parts.append(alert.spoken_message)
+    body = " ".join(part for part in parts if part) + location + home_note
+    return body[:1000]
+
+
 class NoopAlertProvider:
     def send(self, contact: CareContact, alert: EmergencyAlertCreate, image: Optional[bytes] = None) -> AlertDelivery:
         return AlertDelivery(message_id=None, photo_status="test_mode" if image else "not_requested")
@@ -1261,8 +1300,8 @@ class MetaWhatsAppProvider:
                 "name": self.template_name,
                 "language": {"code": self.template_language},
                 "components": [{"type": "body", "parameters": [
-                    {"type": "text", "text": alert.alert_type or alert.kind},
-                    {"type": "text", "text": alert.spoken_message + location + home_note},
+                    {"type": "text", "text": alert.alert_type or ALERT_KIND_LABELS.get(alert.kind, alert.kind)},
+                    {"type": "text", "text": _template_body(alert, location, home_note)},
                 ]}],
             },
         }).encode("utf-8")
@@ -1287,11 +1326,15 @@ class MetaWhatsAppProvider:
             return AlertDelivery(message_id=message_id, channel=channel, template_error=template_error)
         try:
             media_id = self._upload_jpeg(image)
+            # KAN-221: el pie de la foto debe explicar QUE pasa (tipo + interpretacion), no solo ubicar.
+            caption = build_alert_message(
+                alert, home_label=home_label if share_home else None,
+            ).strip()[:1024]
             photo_result = self._post_json(json.dumps({
                 "messaging_product": "whatsapp",
                 "to": contact.phone_e164.removeprefix("+"),
                 "type": "image",
-                "image": {"id": media_id, "caption": "Imagen reciente capturada por Faro para esta alerta." + location},
+                "image": {"id": media_id, "caption": caption},
             }).encode("utf-8"))
             photo_message_id = photo_result.get("messages", [{}])[0].get("id")
             return AlertDelivery(message_id=message_id, photo_message_id=photo_message_id, photo_status="sent", channel=channel, template_error=template_error)
@@ -1345,7 +1388,11 @@ class RekognitionFaceProvider:
                 CollectionId=self.collection_id, Image={"Bytes": image},
                 FaceMatchThreshold=CONFIDENCE_MINIMUM, MaxFaces=3,
             )
-        except self.client.exceptions.InvalidParameterException as exc:
+        except (self.client.exceptions.InvalidParameterException, self.client.exceptions.InvalidImageFormatException) as exc:
+            logging.getLogger("aura.recognition").warning("Frame descartado (%s)", type(exc).__name__)
+            raise NoFaceDetectedError from exc
+        except Exception as exc:  # noqa: BLE001 - nunca tumbar la peticion por un frame corrupto
+            logging.getLogger("aura.recognition").warning("Rekognition no disponible: %s", exc)
             raise NoFaceDetectedError from exc
         if response.get("SearchedFaceConfidence", 0.0) < FACE_DETECTION_MINIMUM:
             raise NoFaceDetectedError
@@ -1981,11 +2028,18 @@ class InMemoryRepository:
         sources = []
         for source in ("glasses", "phone", "portal", "backend"):
             row = by_source.get(source)
+            last_at = datetime.fromisoformat(row["last_at"]) if row and row["last_at"] else None
+            total = int(row["total"]) if row else 0
+            if source == "backend":
+                # El propio backend responde a esta peticion: el servicio esta vivo ahora
+                # aunque no haya eventos recientes con origen "backend" (evita "Sin actividad").
+                last_at = now()
+                total = max(total, 1)
             sources.append(
                 SourceActivity(
                     source=source,
-                    last_event_at=(datetime.fromisoformat(row["last_at"]) if row and row["last_at"] else None),
-                    events_24h=(int(row["total"]) if row else 0),
+                    last_event_at=last_at,
+                    events_24h=total,
                 )
             )
         consent = False
@@ -2533,6 +2587,82 @@ app = FastAPI(title="AURA Care", version="0.2.0")
 web_dir = Path(__file__).resolve().parent.parent / "web"
 app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 
+PORTAL_LOGIN_HTML = """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Faro Familia</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:Inter,system-ui,Segoe UI,sans-serif;
+background:radial-gradient(circle at 85% 8%,#12405f 0,transparent 42%),radial-gradient(circle at 8% 110%,#0f2f47 0,transparent 38%),#080d11;color:#e8f1f6;padding:24px}
+.card{width:min(94%,420px);background:#101820;border:1px solid #1c2a35;border-radius:26px;padding:38px 32px;box-shadow:0 30px 80px #000a0d}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+.mark{width:44px;height:44px;border-radius:14px;background:linear-gradient(145deg,#2b7cb3,#1d5f8f);display:grid;place-items:center;color:#fff;font:800 22px Georgia;box-shadow:0 8px 20px #1d5f8f55}
+.brand b{font:600 20px Georgia;color:#eaf3f8}
+.brand small{display:block;color:#8fa6b3;font-size:12px;font-weight:500}
+h1{font:500 30px/1.15 Georgia;margin:0 0 6px;color:#eaf3f8}
+p.sub{margin:0 0 26px;color:#8fa6b3;font-size:14px}
+label{display:block;font-size:12px;font-weight:700;color:#a9bcc7;margin:0 0 16px}
+input{display:block;width:100%;margin-top:7px;padding:13px 14px;border:1px solid #2a3a46;border-radius:12px;font:inherit;color:#eaf3f8;background:#0b1218;outline:0}
+input:focus{border-color:#2b7cb3;box-shadow:0 0 0 4px #2b7cb322}
+button.primary{width:100%;border:0;border-radius:12px;padding:14px;font:800 15px inherit;color:#fff;cursor:pointer;
+background:linear-gradient(135deg,#2b7cb3,#1d5f8f);box-shadow:0 10px 22px #0a2d4499}
+button.primary:hover{filter:brightness(1.08)}
+.links{margin-top:18px;font-size:13px}
+.links span{color:#6f8794;font-weight:600}
+.divider{display:flex;align-items:center;gap:12px;color:#6f8794;font-size:12px;margin:22px 0 16px}
+.divider:before,.divider:after{content:"";flex:1;height:1px;background:#1e2a33}
+button.ghost{width:100%;border:1px solid #24323d;border-radius:12px;padding:12px;font-weight:700;background:#0b1218;color:#6f8794;cursor:not-allowed}
+.err{background:#3a1c20;color:#f0a8a2;border-radius:10px;padding:10px 12px;font-size:13px;margin-bottom:18px}
+.foot{margin-top:24px;text-align:center;color:#5f7480;font-size:11px}
+</style></head><body>
+<main class="card">
+  <div class="brand"><span class="mark">F</span><span><b>Faro Familia</b><small>Siempre cerca, aunque no estén.</small></span></div>
+  <h1>Acceso privado</h1>
+  <p class="sub">Introduce tus credenciales del equipo para ver el panel.</p>
+  {%error%}
+  <form method="post" action="/login">
+    <label>Usuario<input name="user" autocomplete="username" required autofocus></label>
+    <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="primary" type="submit">Entrar</button>
+  </form>
+  <div class="links"><span>¿Has olvidado tu contraseña? (próximamente)</span></div>
+  <div class="divider">o</div>
+  <button class="ghost" type="button" disabled>Continuar con Google (próximamente)</button>
+  <p class="foot">Faro da Memoria · acceso restringido</p>
+</main></body></html>"""
+
+
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+def portal_login_page(error: Optional[str] = None) -> HTMLResponse:
+    message = '<div class="err">Usuario o contraseña incorrectos.</div>' if error else ""
+    return HTMLResponse(PORTAL_LOGIN_HTML.replace("{%error%}", message), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/login", include_in_schema=False)
+async def portal_login(request: Request) -> Response:
+    form = await request.form()
+    user = str(form.get("user") or "").strip()
+    password = str(form.get("password") or "")
+    expected_user = os.getenv("FARO_PORTAL_USER", "faro").strip()
+    expected_pass = os.getenv("FARO_PORTAL_PASS", "").strip()
+    if expected_pass and secrets.compare_digest(user, expected_user) and secrets.compare_digest(password, expected_pass):
+        token, _ = issue_session_token(configured_care_circle_id(), role="family", subject="portal-login")
+        response = RedirectResponse(url="/", status_code=303)
+        response.set_cookie(
+            "faro_portal_session", token, max_age=7 * 86400,
+            httponly=True, samesite="lax", path="/",
+        )
+        return response
+    return RedirectResponse(url="/login?error=1", status_code=303)
+
+
+@app.get("/logout", include_in_schema=False)
+def portal_logout() -> Response:
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("faro_portal_session", path="/")
+    return response
+
 # KAN-203: rutas que deben seguir siendo publicas aunque el portal tenga contrasena maestra.
 # - /health: monitorizacion sin datos personales.
 # - assetlinks/manifest: verificacion de la TWA; Android no envia credenciales.
@@ -2547,7 +2677,7 @@ app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 PUBLIC_PORTAL_PATHS = (
     "/.well-known/", "/download/", "/v1/whatsapp/webhook", "/assets/",
 )
-PUBLIC_PORTAL_EXACT_PATHS = ("/health", "/v1/pairing/claim")
+PUBLIC_PORTAL_EXACT_PATHS = ("/health", "/v1/pairing/claim", "/login", "/logout")
 DEFAULT_PORTAL_HOSTS = "farofamilia.loginea.com"
 
 
@@ -2584,6 +2714,13 @@ def build_portal_password_app(application: FastAPI) -> FastAPI:
         provided = request.headers.get("authorization", "")
         if provided.casefold().startswith("bearer "):
             return await call_next(request)
+        portal_cookie = request.cookies.get("faro_portal_session", "")
+        if portal_cookie:
+            request.scope["headers"] = [
+                (name, value) for name, value in request.scope.get("headers", [])
+                if name.lower() != b"authorization"
+            ] + [(b"authorization", f"Bearer {portal_cookie}".encode())]
+            return await call_next(request)
         portal_host = is_portal_host(request.headers.get("host", ""))
         expected_user = os.getenv("FARO_PORTAL_USER", "faro").strip()
         expected_b64 = base64.b64encode(f"{expected_user}:{expected}".encode()).decode()
@@ -2603,9 +2740,9 @@ def build_portal_password_app(application: FastAPI) -> FastAPI:
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["Vary"] = "Authorization"
             return response
-        challenge = {"WWW-Authenticate": 'Basic realm="Faro Familia"'} if portal_host else {}
-        challenge["Cache-Control"] = "no-store"
-        return Response(status_code=401, headers=challenge)
+        if request.url.path.startswith("/v1/"):
+            return Response(status_code=401, headers={"Cache-Control": "no-store"})
+        return RedirectResponse(url="/login", status_code=303)
 
     return application
 
@@ -3302,6 +3439,11 @@ def reverse_geocode(latitude: float, longitude: float) -> Optional[str]:
 
 def require_auth_or_device(authorization: Optional[str]) -> str:
     """Acepta el token local (bridge/portal) o una credencial de dispositivo valida (apps)."""
+    logging.getLogger("aura.auth").warning(
+        "auth attempt: len=%d prefix=%r",
+        len(authorization or ""),
+        (authorization or "")[:16],
+    )
     try:
         return require_auth(authorization)
     except HTTPException as error:
@@ -4515,11 +4657,11 @@ CAMERA_HAZARD_SPEECH = {
     ),
 }
 CAMERA_HAZARD_TYPOLOGY = {
-    "dangerous_impact": "una posible caída o golpe",
-    "smoke_or_fire": "posible fuego o humo",
-    "broken_glass": "posibles cristales rotos",
-    "door_open": "la puerta de casa abierta",
-    "water_running": "posible agua corriendo",
+    "dangerous_impact": "caída o golpe",
+    "smoke_or_fire": "fuego o humo",
+    "broken_glass": "rotura de cristales",
+    "door_open": "puerta de casa abierta",
+    "water_running": "fuga de agua",
 }
 CAMERA_SCENE_PROMPT = (
     "Eres el ojo de Faro, la cámara que cuida de una persona mayor en su casa. Describe en UNA "
@@ -4560,6 +4702,8 @@ class CameraFrameUpload(BaseModel):
     request_id: Optional[str] = Field(default=None, max_length=64)
     reason: str = Field(default="demand", pattern="^(demand|watch)$")
     changed: Optional[bool] = None
+    # KAN-228: permite evaluar la deteccion de intrusos sin enviar avisos (pruebas).
+    dry_run: bool = False
 
 
 class CameraCaptureRequest(BaseModel):
@@ -4883,6 +5027,110 @@ def check_camera_hazard(
     return result
 
 
+INTRUDER_WINDOW = timedelta(minutes=10)
+INTRUDER_MIN_FRAMES = 3
+INTRUDER_COOLDOWN = timedelta(minutes=30)
+_intruder_lock = Lock()
+_intruder_seen: dict[str, list[datetime]] = {}
+_intruder_last_alert: dict[str, datetime] = {}
+
+
+def evaluate_camera_intruder(
+    image: bytes, description: Optional[str], dry_run: bool = False,
+) -> dict:
+    """KAN-228: avisa si la camara ve de forma repetida a alguien que no esta entre las personas conocidas."""
+    try:
+        candidates = face_provider.search(image)
+    except NoFaceDetectedError:
+        return {"status": "no_face", "alert": False}
+    except Exception as error:  # noqa: BLE001
+        logging.getLogger("aura.intruder").warning("reconocimiento para intrusos fallido: %s", error)
+        return {"status": "error", "alert": False}
+    actor = configured_care_circle_id()
+    known = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.confidence >= CONFIDENCE_MINIMUM
+            and (candidate.person_id == PATIENT_FACE_ID or candidate.person_id in repository.people)
+        ),
+        None,
+    )
+    if known is not None:
+        with _intruder_lock:
+            _intruder_seen.pop(actor, None)
+        person = repository.people.get(known.person_id)
+        name = person.display_name if person is not None else "la persona cuidada"
+        return {"status": "known", "person": name, "confidence": known.confidence, "alert": False}
+    checked = now()
+    with _intruder_lock:
+        frames = [moment for moment in _intruder_seen.get(actor, []) if checked - moment <= INTRUDER_WINDOW]
+        frames.append(checked)
+        _intruder_seen[actor] = frames
+        previous = _intruder_last_alert.get(actor)
+        ready = len(frames) >= INTRUDER_MIN_FRAMES and (
+            previous is None or checked - previous > INTRUDER_COOLDOWN
+        )
+        if ready:
+            _intruder_last_alert[actor] = checked
+            _intruder_seen[actor] = []
+    if not ready:
+        return {"status": "unknown", "frames": len(frames), "alert": False}
+    if dry_run:
+        return {"status": "intruder", "frames": len(frames), "alert": False, "dry_run": True}
+    context = (
+        "Posible intruso. La cámara ha visto a una persona que no está entre las personas conocidas."
+    )
+    if description:
+        context += f" {description}"
+    alert_request = resolve_alert_location(
+        EmergencyAlertCreate(
+            kind="hazard",
+            alert_type="posible intruso",
+            spoken_message=(
+                "He visto a una persona que no conozco en casa. Aviso a la familia por seguridad."
+            ),
+            context=context,
+            explicit_help_request=False,
+        )
+    )
+    contacts = enabled_alert_contacts()
+    status = "no_contact"
+    if contacts:
+        deliveries, _failures = send_alert_to_contacts(contacts, alert_request, image=image)
+        if any(delivery.message_id for _, delivery in deliveries):
+            status = "sent"
+        elif deliveries:
+            status = "test_mode"
+        else:
+            status = "failed"
+    event = repository.add_event(
+        EventCreate(
+            kind="hazard",
+            summary="Posible intruso: persona no reconocida por la cámara",
+            source="backend",
+            severity="urgent",
+            latitude=alert_request.latitude,
+            longitude=alert_request.longitude,
+            metadata={
+                "intruder": True,
+                "faces": len(candidates),
+                "family_alert_status": status,
+            },
+        )
+    )
+    logging.getLogger("aura.intruder").warning(
+        "Posible intruso detectado (frames=%s, caras=%s, aviso=%s)", len(frames), len(candidates), status
+    )
+    return {
+        "status": "intruder",
+        "frames": len(frames),
+        "alert": status == "sent",
+        "alert_status": status,
+        "event_id": str(event.id),
+    }
+
+
 def process_camera_hazard(image: bytes, verdict: str) -> dict:
     """KAN-178: ante un veredicto PELIGRO ya calculado, avisa a la familia y deja rastro."""
     kind = camera_hazard_kind(verdict)
@@ -4897,8 +5145,15 @@ def process_camera_hazard(image: bytes, verdict: str) -> dict:
                 "spoken": CAMERA_HAZARD_SPEECH.get(kind, CAMERA_HAZARD_SPEECH["dangerous_impact"]),
             }
         _camera_hazard_last[kind] = checked_at
-    typology = CAMERA_HAZARD_TYPOLOGY.get(kind, "un posible peligro")
-    message = f"Faro ha detectado {typology} en casa con la cámara: {verdict.strip()[:200]}"
+    typology = CAMERA_HAZARD_TYPOLOGY.get(kind, "peligro")
+    detalle = verdict.strip()
+    if detalle.upper().startswith("PELIGRO"):
+        detalle = detalle.split(":", 1)[-1].strip() if ":" in detalle else detalle
+    # KAN-221: la familia debe saber QUE se ha interpretado y con "posible" delante.
+    detection_text = f"La cámara ha visto: {detalle[:200]}"
+    interpretation = f"Posible {typology}. {detection_text}"
+    message = interpretation
+    alert_type = typology
     spoken_text = CAMERA_HAZARD_SPEECH.get(kind, CAMERA_HAZARD_SPEECH["dangerous_impact"])
     contacts = enabled_alert_contacts()
     family_alert_status = "no_contact"
@@ -4934,7 +5189,9 @@ def process_camera_hazard(image: bytes, verdict: str) -> dict:
             contacts,
             EmergencyAlertCreate(
                 kind="hazard",
-                spoken_message=message,
+                alert_type=alert_type,
+                spoken_message=spoken_text,
+                context=message,
                 explicit_help_request=False,
                 latitude=latitude,
                 longitude=longitude,
@@ -5036,6 +5293,9 @@ def upload_camera_frame(
     camera_eye_store(
         image, mime_type, description, hazard, kind, evidence_key, request.request_id,
     )
+    intruder: dict = {"status": "skipped"}
+    if not hazard:
+        intruder = evaluate_camera_intruder(image, description, request.dry_run)
     payload = {
         "ok": True,
         "captured_at": now().isoformat(),
@@ -5046,6 +5306,7 @@ def upload_camera_frame(
         "evidence_key": evidence_key,
         "family_alert_status": result.get("family_alert_status"),
         "spoken": result.get("spoken"),
+        "intruder": intruder,
         "reason": "watch" if is_watch else "demand",
     }
     if is_watch:
@@ -6595,7 +6856,7 @@ def delete_person(person_id: UUID, authorization: Optional[str] = Header(default
 
 @app.post("/v1/recognitions", response_model=RecognitionResult)
 def recognize(request: Request, files: Annotated[list[UploadFile], File()], authorization: Optional[str] = Header(default=None)) -> RecognitionResult:
-    actor = require_auth(authorization)
+    actor = require_auth_or_device(authorization)
     record_usage(actor)
     images = read_images(files, required=3)
     candidates: list[FaceCandidate] = []
@@ -6607,8 +6868,15 @@ def recognize(request: Request, files: Annotated[list[UploadFile], File()], auth
         except NoFaceDetectedError:
             continue
     if frames_with_faces < CONSENSUS_MINIMUM:
+        logging.getLogger("aura.recognition").warning(
+            "Sin consenso: frames_con_cara=%s/%s", frames_with_faces, CONSENSUS_MINIMUM
+        )
         return RecognitionResult(status="unknown", reason="No clear face detected across enough frames")
     person_id, confidence, reason = decide(candidates)
+    logging.getLogger("aura.recognition").warning(
+        "Decision: person=%s conf=%s reason=%s frames=%s candidates=%s",
+        person_id, confidence, reason, frames_with_faces, len(candidates),
+    )
     if person_id == PATIENT_FACE_ID:
         profile = repository.get_patient_profile()
         if profile is not None and profile.face_enrollment_complete:
@@ -7781,6 +8049,22 @@ acoustic_listening = EnvironmentalListeningEngine(ListeningConfig())
 ACOUSTIC_ALERT_DEDUP = timedelta(minutes=10)
 
 
+def _acoustic_context(escalation: dict, label: str) -> str:
+    """KAN-221: explica en el aviso que sonido se detecto y como respondio el paciente."""
+    description = str(escalation.get("description") or "").strip()
+    if description:
+        return description[:800]
+    reason = str(escalation.get("reason") or "").strip()
+    pieces = [f"Posible {label}: la IA ha detectado un sonido compatible"]
+    if reason == "no_response":
+        pieces.append("y el paciente no ha respondido a la comprobación")
+    elif reason == "no_visual_confirmation":
+        pieces.append("y la cámara no ha podido confirmarlo")
+    elif reason:
+        pieces.append(f"(motivo: {reason})")
+    return " ".join(pieces)[:800]
+
+
 def dispatch_acoustic_escalation(escalation: dict) -> dict:
     """KAN-207: aviso cauteloso con tipologia, descripcion y ubicacion garantizadas."""
     contacts = enabled_alert_contacts()
@@ -7804,6 +8088,7 @@ def dispatch_acoustic_escalation(escalation: dict) -> dict:
     alert_request = resolve_alert_location(EmergencyAlertCreate(
         kind=escalation["kind"], alert_type=signal_label,
         spoken_message=escalation["spoken_message"],
+        context=_acoustic_context(escalation, signal_label),
         explicit_help_request=escalation["explicit_help_request"],
     ))
     draft = EmergencyAlert(id=uuid4(), created_at=now(), delivery_status="pending", **alert_request.model_dump())
