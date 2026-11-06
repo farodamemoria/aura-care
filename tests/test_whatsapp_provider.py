@@ -36,3 +36,29 @@ def test_provider_sends_template(kind: str, monkeypatch: pytest.MonkeyPatch) -> 
     delivery = provider.send(_Contact(), alert)
     assert delivery.message_id == "wamid.1"
     assert payloads  # se construyó al menos un payload
+
+
+def test_kan221_alerta_explica_que_ha_pasado() -> None:
+    alert = main.EmergencyAlertCreate(
+        kind="hazard",
+        spoken_message="¿Estás bien?",
+        context="La cámara ha visto a una persona en el suelo junto a la cocina",
+        explicit_help_request=False,
+        latitude=42.0, longitude=-8.0, location_source="last_known",
+    )
+    message = main.build_alert_message(alert)
+    assert "Tipo: peligro en casa" in message
+    assert "Qué ha pasado: La cámara ha visto a una persona en el suelo" in message
+    assert "maps.google.com" in message
+
+
+def test_kan221_plantilla_incluye_la_interpretacion() -> None:
+    alert = main.EmergencyAlertCreate(
+        kind="hazard", alert_type="posible caída",
+        spoken_message="No responde", context="El paciente no contesta a la comprobación",
+        explicit_help_request=False, latitude=42.0, longitude=-8.0,
+    )
+    body = main._template_body(alert, " https://maps.google.com/?q=42,-8", "")
+    assert "posible caída" in (alert.alert_type or "").lower()
+    assert "Qué ha pasado: El paciente no contesta" in body
+    assert "No responde" in body
